@@ -231,6 +231,10 @@
     padding-left: 2rem;
     padding-right: 2rem;
   }
+
+  .add-memory-live-canvas {
+    height: 240px;
+  }
 }
 
 /* Add your memory composer */
@@ -411,8 +415,8 @@
 .add-memory-live-canvas {
   display: block;
   width: 100%;
-  height: 180px;
-  background: transparent;
+  height: 160px;
+  background: none;
 }
 
 .add-memory-live-time {

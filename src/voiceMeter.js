@@ -1,13 +1,17 @@
 const GOLD = "#ffd89a";
 const PAPER = "#e2d8ca";
 
+/** A little slower than the first knot, still fast enough that a sentence draws a loop. */
 const RIBBONS = [
-  { color: GOLD, phase: 0.2, freq: 0.55, harm: 0.9, band: [1, 8] },
-  { color: PAPER, phase: 1.4, freq: 0.8, harm: 1.35, band: [8, 22] },
-  { color: GOLD, phase: 2.5, freq: 1.15, harm: 0.7, band: [22, 48] },
-  { color: PAPER, phase: 3.7, freq: 0.42, harm: 1.7, band: [4, 16] },
-  { color: GOLD, phase: 5.1, freq: 1.45, harm: 1.05, band: [28, 64] },
+  { color: GOLD, phase: 0.3, freq: 0.42, harm: 0.55, spanX: 0.9, spanY: 0.58, band: [1, 6] },
+  { color: PAPER, phase: 1.6, freq: 0.58, harm: 0.92, spanX: 0.84, spanY: 0.74, band: [6, 18] },
+  { color: GOLD, phase: 2.7, freq: 0.84, harm: 1.25, spanX: 0.8, spanY: 0.7, band: [18, 40] },
+  { color: PAPER, phase: 4.05, freq: 0.34, harm: 0.7, spanX: 0.88, spanY: 0.64, band: [3, 14] },
+  { color: GOLD, phase: 5.2, freq: 1.05, harm: 0.4, spanX: 0.82, spanY: 0.78, band: [24, 56] },
 ];
+/** Quieter speech still moves the drawing; values stay clamped to 1. */
+const VOICE_GAIN = 1.15;
+const SILENCE_FLOOR = 0.018 / VOICE_GAIN;
 
 /**
  * Long-exposure ribbons drawn by the microphone.
@@ -26,11 +30,9 @@ export function createVoiceMeter(canvas) {
     x: 0,
     y: 0,
     ready: false,
-    swing: 0.12,
     energy: 0,
   }));
   let smoothedLoud = 0;
-  let washDebt = 0;
 
   function reduced() {
     return (
@@ -51,7 +53,7 @@ export function createVoiceMeter(canvas) {
         const v = (timeBins[i] - 128) / 128;
         sum += v * v;
       }
-      loud = Math.min(1, Math.sqrt(sum / timeBins.length) * 3.2);
+      loud = Math.sqrt(sum / timeBins.length) * 3.2;
     }
     if (analyser.getByteFrequencyData && bins) {
       if (!freqBins || freqBins.length !== bins) freqBins = new Uint8Array(bins);
@@ -76,7 +78,7 @@ export function createVoiceMeter(canvas) {
     if (!ctx) return null;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cssW = canvas.clientWidth || 280;
-    const cssH = canvas.clientHeight || 180;
+    const cssH = canvas.clientHeight || 240;
     const w = Math.max(1, Math.floor(cssW * dpr));
     const h = Math.max(1, Math.floor(cssH * dpr));
     if (canvas.width !== w || canvas.height !== h) {
@@ -89,45 +91,53 @@ export function createVoiceMeter(canvas) {
     return { ctx, dpr, w, h };
   }
 
+  function sensed(value) {
+    return Math.min(1, Math.max(0, value - SILENCE_FLOOR) * VOICE_GAIN);
+  }
+
   function paintTrail(now, analyser) {
     const box = size();
     if (!box) return;
     const { ctx, dpr, w, h } = box;
     const { freq, loud } = read(analyser);
-    smoothedLoud += (loud - smoothedLoud) * 0.12;
-    const dt = 0.016;
-    washDebt += dt;
-    ctx.globalCompositeOperation = "source-over";
-    while (washDebt >= 0.1) {
-      washDebt -= 0.1;
-      ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
-      ctx.fillRect(0, 0, w, h);
-    }
+    const voice = sensed(loud);
+    smoothedLoud += (voice - smoothedLoud) * 0.16;
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
+    ctx.fillRect(0, 0, w, h);
     ctx.globalCompositeOperation = "lighter";
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     const t = now / 1000;
     const cx = w * 0.5;
-    const cy = h * 0.52;
+    const cy = h * 0.5;
+    const pad = 2 * dpr;
     for (const ribbon of ribbons) {
-      const energy = bandEnergy(freq, ribbon.band[0], ribbon.band[1]);
-      ribbon.energy += (energy - ribbon.energy) * 0.08;
-      const targetSwing = 0.1 + smoothedLoud * 0.55 + ribbon.energy * 0.7;
-      ribbon.swing += (targetSwing - ribbon.swing) * 0.06;
-      const x =
-        cx +
-        Math.sin(t * ribbon.freq + ribbon.phase) * ribbon.swing * w * 0.38;
-      const y =
-        cy +
-        Math.sin(t * ribbon.harm * 1.37 + ribbon.phase * 1.6) *
-          ribbon.swing *
-          h *
-          0.32;
-      const alpha = 0.12 + smoothedLoud * 0.55 + ribbon.energy * 0.4;
+      const energy = sensed(bandEnergy(freq, ribbon.band[0], ribbon.band[1]));
+      ribbon.energy += (energy - ribbon.energy) * 0.1;
+      const reach = Math.min(1, smoothedLoud * 0.62 + ribbon.energy * 0.62);
+      const spanX = ribbon.spanX + (0.98 - ribbon.spanX) * reach;
+      const spanY = ribbon.spanY + (0.94 - ribbon.spanY) * reach;
+      const halfX = Math.min(w * 0.5 - pad, w * spanX * 0.5);
+      const halfY = Math.min(h * 0.5 - pad, h * spanY * 0.5);
+      const x = Math.min(
+        w - pad,
+        Math.max(pad, cx + Math.sin(t * ribbon.freq + ribbon.phase) * halfX)
+      );
+      const y = Math.min(
+        h - pad,
+        Math.max(
+          pad,
+          cy +
+            Math.sin(t * ribbon.harm * 1.2 + ribbon.phase * 1.7) * halfY
+        )
+      );
+      const alpha = Math.min(1, 0.72 + smoothedLoud * 0.22 + ribbon.energy * 0.2);
+      const width = (1.6 + smoothedLoud * 0.9) * dpr;
       if (ribbon.ready) {
         ctx.beginPath();
-        ctx.strokeStyle = hexAlpha(ribbon.color, Math.min(0.85, alpha));
-        ctx.lineWidth = (1 + smoothedLoud * 0.45) * dpr;
+        ctx.strokeStyle = hexAlpha(ribbon.color, alpha);
+        ctx.lineWidth = width;
         ctx.moveTo(ribbon.x, ribbon.y);
         ctx.lineTo(x, y);
         ctx.stroke();
@@ -144,7 +154,7 @@ export function createVoiceMeter(canvas) {
     if (!box) return;
     const { ctx, dpr, w, h } = box;
     const { loud } = read(analyser);
-    smoothedLoud += (loud - smoothedLoud) * 0.18;
+    smoothedLoud += (sensed(loud) - smoothedLoud) * 0.18;
     const breathe = 0.5 + 0.5 * Math.sin(now / 1100);
     const level = Math.max(smoothedLoud, 0.06 + breathe * 0.05);
     ctx.clearRect(0, 0, w, h);
@@ -176,13 +186,11 @@ export function createVoiceMeter(canvas) {
     start(getAnalyser) {
       if (running) return;
       running = true;
-      washDebt = 0;
       smoothedLoud = 0;
       const box = size();
       if (box) box.ctx.clearRect(0, 0, box.w, box.h);
       ribbons.forEach((ribbon) => {
         ribbon.ready = false;
-        ribbon.swing = 0.12;
         ribbon.energy = 0;
       });
       loop(getAnalyser);
