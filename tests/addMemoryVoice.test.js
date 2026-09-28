@@ -45,11 +45,16 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe("Add memory voice input", () => {
   let mount;
   let composer;
+  let onRecordingStart;
+  let onRecordingEnd;
 
   beforeEach(() => {
     localStorage.clear();
     persisted.length = 0;
     fakeVoice.recording = false;
+    fakeVoice.cancel.mockClear();
+    onRecordingStart = vi.fn();
+    onRecordingEnd = vi.fn();
     window.MediaRecorder = function MediaRecorder() {};
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
@@ -57,7 +62,12 @@ describe("Add memory voice input", () => {
     });
     mount = document.createElement("div");
     document.body.appendChild(mount);
-    composer = createAddMemory({ mount, garden: null });
+    composer = createAddMemory({
+      mount,
+      garden: null,
+      onRecordingStart,
+      onRecordingEnd,
+    });
     composer.open();
   });
 
@@ -79,14 +89,25 @@ describe("Add memory voice input", () => {
     await flush();
     expect(q("[data-record]").classList.contains("is-recording")).toBe(true);
     expect(q("[data-next]").disabled).toBe(true);
+    expect(q("[data-live]").hidden).toBe(false);
+    expect(q("[data-live-canvas]")).not.toBeNull();
+    expect(q("[data-live-time]").textContent).toMatch(/\/\s*1:00/);
+    expect(q("[data-status]").textContent).not.toMatch(/Listening/);
+    expect(q("[data-record]").classList.contains("add-memory-stop")).toBe(true);
+    expect(onRecordingStart).toHaveBeenCalledTimes(1);
 
     fakeVoice.onTranscript("the harbour at dusk");
     expect(q("[data-body]").value).toBe("the harbour at dusk");
 
     q("[data-record]").click();
     await flush();
+    expect(q("[data-live]").hidden).toBe(true);
     expect(q("[data-take]").hidden).toBe(false);
+    expect(q("[data-take] audio[controls]")).toBeNull();
+    expect(q("[data-take] [data-play]")).not.toBeNull();
+    expect(q("[data-take] canvas")).not.toBeNull();
     expect(q("[data-record]").textContent).toBe("Record again");
+    expect(onRecordingEnd).toHaveBeenCalledTimes(1);
     // Audio alone is enough, even under the text minimum
     expect(q("[data-next]").disabled).toBe(false);
   });
@@ -109,6 +130,7 @@ describe("Add memory voice input", () => {
     await flush();
     composer.close();
     expect(fakeVoice.cancel).toHaveBeenCalled();
+    expect(onRecordingEnd).toHaveBeenCalledTimes(1);
   });
 
   it("records in the chosen language and remembers it", async () => {

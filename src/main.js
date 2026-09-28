@@ -12,6 +12,7 @@ import { createLocations } from "./screens/Locations.js";
 import { createMakePass } from "./screens/MakePass.js";
 import { createAddMemory } from "./screens/AddMemory.js";
 import { createAmbience } from "./ambience.js";
+import { createAudioPlayer } from "./audioPlayer.js";
 import { createSydneyMap } from "./sydneyMap.js";
 import {
   isBookmarked,
@@ -35,6 +36,8 @@ const memoryTitle = document.querySelector("#memory-title");
 const memoryRelationship = document.querySelector("#memory-relationship");
 const memoryBody = document.querySelector("#memory-body");
 const memoryAudio = document.querySelector("#memory-audio");
+/** @type {ReturnType<typeof createAudioPlayer> | null} */
+let memoryPlayer = null;
 const memoryDismiss = document.querySelector("#memory-dismiss");
 const btnSaveMemory = document.querySelector("#btn-save-memory");
 const ambienceToggle = document.querySelector("#ambience-toggle");
@@ -585,10 +588,11 @@ const ui = {
     syncSaveButton();
     if (memoryAudio) {
       if (audioDataUrl) {
-        memoryAudio.src = audioDataUrl;
+        if (!memoryPlayer) memoryPlayer = createAudioPlayer(memoryAudio);
+        memoryPlayer.setSource(audioDataUrl);
         memoryAudio.hidden = false;
       } else {
-        memoryAudio.removeAttribute("src");
+        memoryPlayer?.stop();
         memoryAudio.hidden = true;
       }
     }
@@ -683,8 +687,7 @@ const ui = {
         });
       }
       if (memoryAudio) {
-        memoryAudio.pause?.();
-        memoryAudio.removeAttribute("src");
+        memoryPlayer?.stop();
         memoryAudio.hidden = true;
       }
       if (memoryLeftBy) {
@@ -846,6 +849,12 @@ function ensureGarden() {
         },
         onArrivalNote(id) {
           showArrivalNote(id);
+        },
+        onRecordingStart() {
+          ambience.duck();
+        },
+        onRecordingEnd() {
+          ambience.unduck();
         },
       });
       if (import.meta.env.DEV) {

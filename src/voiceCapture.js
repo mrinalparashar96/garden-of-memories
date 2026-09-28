@@ -10,6 +10,9 @@ export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
   let recognition = null;
   let transcript = "";
   let startedAt = 0;
+  let audioCtx = null;
+  let analyser = null;
+  let sourceNode = null;
 
   const SpeechRecognition =
     typeof window !== "undefined"
@@ -20,6 +23,7 @@ export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
     transcript = "";
     chunks = [];
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    attachAnalyser(stream);
     const mime = pickMimeType();
     mediaRecorder = mime
       ? new MediaRecorder(stream, { mimeType: mime })
@@ -114,7 +118,40 @@ export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
     cleanupStream();
   }
 
+  function attachAnalyser(mediaStream) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    try {
+      audioCtx = new AudioCtx();
+      sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      sourceNode.connect(analyser);
+      if (audioCtx.state === "suspended") void audioCtx.resume();
+    } catch {
+      analyser = null;
+      sourceNode = null;
+    }
+  }
+
+  function releaseAnalyser() {
+    try {
+      sourceNode?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    sourceNode = null;
+    analyser = null;
+    if (audioCtx) {
+      const closing = audioCtx;
+      audioCtx = null;
+      void closing.close?.();
+    }
+  }
+
   function cleanupStream() {
+    releaseAnalyser();
     stream?.getTracks?.().forEach((t) => t.stop());
     stream = null;
   }
@@ -123,11 +160,27 @@ export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
     return transcript;
   }
 
+  function getAnalyser() {
+    return analyser;
+  }
+
+  function getStream() {
+    return stream;
+  }
+
   function isRecording() {
     return mediaRecorder?.state === "recording";
   }
 
-  return { start, stop, cancel, getTranscript, isRecording };
+  return {
+    start,
+    stop,
+    cancel,
+    getTranscript,
+    getAnalyser,
+    getStream,
+    isRecording,
+  };
 }
 
 function pickMimeType() {
