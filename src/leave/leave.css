@@ -375,3 +375,27 @@
 .add-memory-review-audio {
   margin: 0 0 1rem;
 }
+
+.add-memory-voice-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.add-memory-voice-row .pill--ghost[data-record] {
+  margin: 0;
+}
+
+.add-memory-lang-select {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: 0.72rem;
+  max-width: 11rem;
+}
+
+.add-memory-lang-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

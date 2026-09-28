@@ -3,7 +3,7 @@
  * Audio is the memory; transcript is optional and unpolished.
  */
 
-export function createVoiceCapture({ onTranscript } = {}) {
+export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
   let mediaRecorder = null;
   let chunks = [];
   let stream = null;
@@ -40,7 +40,7 @@ export function createVoiceCapture({ onTranscript } = {}) {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = "en-AU";
+      recognition.lang = lang;
       recognition.onresult = (event) => {
         let text = "";
         for (let i = 0; i < event.results.length; i++) {

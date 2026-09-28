@@ -21,9 +21,11 @@ const fakeVoice = {
   isRecording: () => fakeVoice.recording,
 };
 
+let lastLang = "";
 vi.mock("../src/voiceCapture.js", () => ({
-  createVoiceCapture: ({ onTranscript } = {}) => {
+  createVoiceCapture: ({ onTranscript, lang } = {}) => {
     fakeVoice.onTranscript = onTranscript;
+    lastLang = lang;
     return fakeVoice;
   },
 }));
@@ -45,6 +47,7 @@ describe("Add memory voice input", () => {
   let composer;
 
   beforeEach(() => {
+    localStorage.clear();
     persisted.length = 0;
     fakeVoice.recording = false;
     window.MediaRecorder = function MediaRecorder() {};
@@ -106,6 +109,29 @@ describe("Add memory voice input", () => {
     await flush();
     composer.close();
     expect(fakeVoice.cancel).toHaveBeenCalled();
+  });
+
+  it("records in the chosen language and remembers it", async () => {
+    const select = q("[data-lang]");
+    expect(select).not.toBeNull();
+    expect(select.value).toBe("en-AU");
+    select.value = "vi-VN";
+    select.dispatchEvent(new Event("change"));
+    expect(q("[data-body]").getAttribute("lang")).toBe("vi-VN");
+
+    q("[data-record]").click();
+    await flush();
+    expect(lastLang).toBe("vi-VN");
+    expect(select.disabled).toBe(true);
+    q("[data-record]").click();
+    await flush();
+    expect(select.disabled).toBe(false);
+
+    // A fresh composer opens with the remembered language
+    composer.destroy();
+    composer = createAddMemory({ mount, garden: null });
+    composer.open();
+    expect(q("[data-lang]").value).toBe("vi-VN");
   });
 
   it("hides voice input when recording isn't supported", () => {

@@ -11,6 +11,11 @@ import {
 import { addMemory as persistMemory } from "../memoryStore.js";
 import { getPass } from "../pass/passStore.js";
 import { createVoiceCapture } from "../voiceCapture.js";
+import {
+  getPreferredVoiceLanguage,
+  setPreferredVoiceLanguage,
+  VOICE_LANGUAGES,
+} from "../voiceLanguages.js";
 
 const HOLD_MS = 1200;
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
@@ -72,6 +77,7 @@ export function createAddMemory({
       relationship: "",
       region: "",
       audioDataUrl: "",
+      lang: "",
     };
   }
 
@@ -101,6 +107,7 @@ export function createAddMemory({
     casting = false;
     draft = emptyDraft();
     draft.region = garden?.suggestRegion?.() || "forecourt";
+    draft.lang = getPreferredVoiceLanguage();
     root.hidden = false;
     requestAnimationFrame(() => root.classList.add("is-active"));
     onEnter?.();
@@ -169,7 +176,19 @@ export function createAddMemory({
           ${
             canVoice
               ? `<div class="add-memory-voice" data-voice>
-              <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
+              <div class="add-memory-voice-row">
+                <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
+                <label class="add-memory-voice-lang">
+                  <span class="visually-hidden">Language you'll speak</span>
+                  <select class="emotion-select add-memory-lang-select" data-lang>
+                    ${VOICE_LANGUAGES.map(
+                      (l) => `<option value="${l.code}" lang="${l.code}"${
+                        l.code === draft.lang ? " selected" : ""
+                      }>${l.label}</option>`
+                    ).join("")}
+                  </select>
+                </label>
+              </div>
               <div class="add-memory-voice-take" data-take hidden>
                 <audio class="memory-audio" data-take-audio controls></audio>
                 <button type="button" class="add-memory-voice-remove" data-take-remove>Remove recording</button>
@@ -192,6 +211,7 @@ export function createAddMemory({
     const take = root.querySelector("[data-take]");
     const takeAudio = root.querySelector("[data-take-audio]");
     const takeRemove = root.querySelector("[data-take-remove]");
+    const langSelect = root.querySelector("[data-lang]");
 
     let statusNote = "";
     const setNote = (text) => {
@@ -235,6 +255,7 @@ export function createAddMemory({
       recordBtn.setAttribute("aria-pressed", on ? "true" : "false");
       if (on) recordBtn.textContent = "Stop";
       if (body) body.readOnly = on;
+      if (langSelect) langSelect.disabled = on;
       if (take && on) take.hidden = true;
     };
 
@@ -252,6 +273,7 @@ export function createAddMemory({
       // Text typed before speaking stays; the transcript is appended after it.
       const prefix = draft.body.trim();
       voice = createVoiceCapture({
+        lang: draft.lang,
         onTranscript(text) {
           if (!body) return;
           body.value = (prefix ? `${prefix} ${text}` : text).slice(0, MAX_BODY_CHARS);
@@ -304,6 +326,16 @@ export function createAddMemory({
     recordBtn?.addEventListener("click", () => {
       if (isRecording()) void stopRecording();
       else void startRecording();
+    });
+
+    const applyLang = () => {
+      if (body && draft.lang) body.setAttribute("lang", draft.lang);
+    };
+    applyLang();
+    langSelect?.addEventListener("change", () => {
+      draft.lang = langSelect.value;
+      setPreferredVoiceLanguage(draft.lang);
+      applyLang();
     });
 
     takeRemove?.addEventListener("click", () => {
@@ -560,6 +592,7 @@ export function createAddMemory({
     };
     if (landing) memory.position = landing;
     if (hasAudio()) memory.audioDataUrl = draft.audioDataUrl;
+    if (draft.lang) memory.lang = draft.lang;
 
     const { ok, audioDropped, memory: saved } = persistMemory(memory);
     if (audioDropped) {

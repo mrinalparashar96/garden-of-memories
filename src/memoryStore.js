@@ -146,6 +146,9 @@ function normalizeMemory(m) {
     out.audioDataUrl = m.audioDataUrl;
   }
   if (m.place) out.place = String(m.place);
+  if (typeof m.lang === "string" && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(m.lang)) {
+    out.lang = m.lang;
+  }
   if (
     Array.isArray(m.position) &&
     m.position.length >= 3 &&

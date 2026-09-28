@@ -533,6 +533,7 @@ const ui = {
     relationship,
     body,
     audioDataUrl,
+    lang = "",
     title,
     emotion,
     place = "Opera House",
@@ -574,6 +575,13 @@ const ui = {
       }
     }
     memoryBody.textContent = body;
+    // Tell the browser the language so fonts, hyphenation and screen readers behave.
+    if (lang) memoryBody.setAttribute("lang", lang);
+    else memoryBody.removeAttribute("lang");
+    if (memoryTitle) {
+      if (lang) memoryTitle.setAttribute("lang", lang);
+      else memoryTitle.removeAttribute("lang");
+    }
     syncSaveButton();
     if (memoryAudio) {
       if (audioDataUrl) {
