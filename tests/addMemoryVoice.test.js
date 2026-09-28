@@ -145,6 +145,17 @@ describe("Add memory voice input", () => {
     expect(onRecordingEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("does not warn about the transcript before a recording starts", () => {
+    const note = q("[data-transcript-note]");
+    expect(note.hidden).toBe(true);
+    expect(note.textContent).toBe("");
+    expect(q(".leave-type-wrap").contains(note)).toBe(false);
+    expect(
+      q("[data-lang-line]").compareDocumentPosition(note) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("shows a note when live transcript is unavailable", async () => {
     q("[data-record]").click();
     await flush();

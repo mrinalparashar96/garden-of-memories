@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   TRANSCRIPT_UNAVAILABLE,
   createVoiceCapture,
@@ -7,6 +7,10 @@ import {
 describe("voice capture transcription", () => {
   /** @type {object[]} */
   let sessions;
+
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
 
   afterEach(() => {
     delete window.webkitSpeechRecognition;
@@ -84,6 +88,45 @@ describe("voice capture transcription", () => {
     });
     expect(seen.at(-1).text).toBe("hello there again");
     await capture.stop();
+  });
+
+  it("ignores no-speech and keeps listening", async () => {
+    install();
+    const issues = [];
+    const capture = createVoiceCapture({
+      onTranscript: () => {},
+      onTranscriptIssue: (message) => issues.push(message),
+    });
+    await capture.start();
+    sessions[0].onerror({ error: "no-speech" });
+    sessions[0].onend();
+    expect(issues).toEqual([]);
+    expect(sessions).toHaveLength(2);
+    await capture.stop();
+  });
+
+  it("remembers a fast network failure for the rest of the visit", async () => {
+    install();
+    const issues = [];
+    const capture = createVoiceCapture({
+      onTranscript: () => {},
+      onTranscriptIssue: (message) => issues.push(message),
+    });
+    await capture.start();
+    sessions[0].onerror({ error: "network" });
+    sessions[0].onend();
+    expect(issues).toEqual([TRANSCRIPT_UNAVAILABLE]);
+    expect(sessions).toHaveLength(1);
+    await capture.stop();
+
+    const again = [];
+    const next = createVoiceCapture({
+      onTranscriptIssue: (message) => again.push(message),
+    });
+    await next.start();
+    expect(sessions).toHaveLength(1);
+    expect(again).toEqual([TRANSCRIPT_UNAVAILABLE]);
+    await next.stop();
   });
 
   it("surfaces network errors and does not restart", async () => {

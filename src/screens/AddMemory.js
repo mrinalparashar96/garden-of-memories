@@ -217,7 +217,6 @@ export function createAddMemory({
                 }">${escapeHtml(draft.body)}</textarea>
               <div class="add-memory-body-mirror" data-body-mirror hidden></div>
             </div>
-            <p class="add-memory-transcript-note" data-transcript-note hidden></p>
             <p class="leave-type-count" data-count>0/${MAX_BODY_CHARS}</p>
           </div>
           ${
@@ -227,6 +226,7 @@ export function createAddMemory({
                 <span class="add-memory-lang-lead" aria-hidden="true">I'll speak in</span>
                 <span data-lang-picker></span>
               </p>
+              <p class="add-memory-transcript-note" data-transcript-note hidden></p>
               <div class="add-memory-live" data-live hidden>
                 <canvas class="add-memory-live-canvas" data-live-canvas aria-hidden="true"></canvas>
                 <p class="add-memory-live-time" data-live-time>0:00 / ${formatClock(MAX_RECORD_MS)}</p>
@@ -278,9 +278,12 @@ export function createAddMemory({
 
     const showTranscriptNote = (message) => {
       if (!transcriptNote) return;
-      if (!message) {
-        transcriptNote.hidden = true;
-        transcriptNote.textContent = "";
+      if (!message || !recordingUi) {
+        if (!message) {
+          pendingIssue = "";
+          transcriptNote.hidden = true;
+          transcriptNote.textContent = "";
+        }
         return;
       }
       transcriptNote.hidden = false;
@@ -288,6 +291,8 @@ export function createAddMemory({
     };
 
     let statusNote = "";
+    let recordingUi = false;
+    let pendingIssue = "";
     const setNote = (text) => {
       statusNote = text;
       sync();
@@ -326,6 +331,7 @@ export function createAddMemory({
     };
 
     const setRecordingUi = (on) => {
+      recordingUi = on;
       voiceWrap?.classList.toggle("is-live", on);
       if (live) live.hidden = !on;
       if (recordBtn) {
@@ -368,6 +374,8 @@ export function createAddMemory({
 
     const startRecording = async () => {
       const gen = ++recordGen;
+      pendingIssue = "";
+      showTranscriptNote("");
       // Text typed before speaking stays; the transcript is appended after it.
       const prefix = draft.body.trim();
       const capture = createVoiceCapture({
@@ -395,6 +403,10 @@ export function createAddMemory({
           sync();
         },
         onTranscriptIssue(message) {
+          if (!recordingUi) {
+            pendingIssue = message;
+            return;
+          }
           showTranscriptNote(message);
         },
       });
@@ -419,10 +431,10 @@ export function createAddMemory({
         return;
       }
       statusNote = "";
-      showTranscriptNote("");
       if (status) status.textContent = "";
       recordStart = performance.now();
       setRecordingUi(true);
+      if (pendingIssue) showTranscriptNote(pendingIssue);
       duckedGen = gen;
       onRecordingStart?.();
       tickClock();

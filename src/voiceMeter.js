@@ -1,20 +1,36 @@
 const GOLD = "#ffd89a";
-const COUNT = 42;
+const PAPER = "#e2d8ca";
+
+const RIBBONS = [
+  { color: GOLD, phase: 0.2, freq: 0.55, harm: 0.9, band: [1, 8] },
+  { color: PAPER, phase: 1.4, freq: 0.8, harm: 1.35, band: [8, 22] },
+  { color: GOLD, phase: 2.5, freq: 1.15, harm: 0.7, band: [22, 48] },
+  { color: PAPER, phase: 3.7, freq: 0.42, harm: 1.7, band: [4, 16] },
+  { color: GOLD, phase: 5.1, freq: 1.45, harm: 1.05, band: [28, 64] },
+];
 
 /**
- * Horizontal band that rises with the microphone and idles as a faint shimmer.
- * prefers-reduced-motion draws a static level meter instead.
+ * Long-exposure ribbons drawn by the microphone.
+ * prefers-reduced-motion draws a slowly breathing level meter instead.
  * @param {HTMLCanvasElement} canvas
  */
 export function createVoiceMeter(canvas) {
   let raf = 0;
   let running = false;
   /** @type {Uint8Array | null} */
-  let bins = null;
-  const particles = Array.from({ length: COUNT }, (_, i) => ({
-    phase: (i / COUNT) * Math.PI * 2,
-    level: 0,
+  let freqBins = null;
+  /** @type {Uint8Array | null} */
+  let timeBins = null;
+  const ribbons = RIBBONS.map((ribbon) => ({
+    ...ribbon,
+    x: 0,
+    y: 0,
+    ready: false,
+    swing: 0.12,
+    energy: 0,
   }));
+  let smoothedLoud = 0;
+  let washDebt = 0;
 
   function reduced() {
     return (
@@ -23,52 +39,121 @@ export function createVoiceMeter(canvas) {
   }
 
   function read(analyser) {
-    if (!analyser?.getByteFrequencyData) return null;
-    const n = analyser.frequencyBinCount || 0;
-    if (!n) return null;
-    if (!bins || bins.length !== n) bins = new Uint8Array(n);
-    analyser.getByteFrequencyData(bins);
-    return bins;
+    if (!analyser) return { freq: null, loud: 0 };
+    const fft = analyser.fftSize || analyser.frequencyBinCount * 2 || 0;
+    const bins = analyser.frequencyBinCount || 0;
+    let loud = 0;
+    if (analyser.getByteTimeDomainData && fft) {
+      if (!timeBins || timeBins.length !== fft) timeBins = new Uint8Array(fft);
+      analyser.getByteTimeDomainData(timeBins);
+      let sum = 0;
+      for (let i = 0; i < timeBins.length; i++) {
+        const v = (timeBins[i] - 128) / 128;
+        sum += v * v;
+      }
+      loud = Math.min(1, Math.sqrt(sum / timeBins.length) * 3.2);
+    }
+    if (analyser.getByteFrequencyData && bins) {
+      if (!freqBins || freqBins.length !== bins) freqBins = new Uint8Array(bins);
+      analyser.getByteFrequencyData(freqBins);
+    } else {
+      freqBins = null;
+    }
+    return { freq: freqBins, loud };
   }
 
-  function loudness(data) {
-    if (!data?.length) return 0;
+  function bandEnergy(freq, start, end) {
+    if (!freq?.length) return 0;
+    const a = Math.min(freq.length - 1, Math.max(0, start));
+    const b = Math.min(freq.length, Math.max(a + 1, end));
     let sum = 0;
-    const limit = Math.max(1, Math.floor(data.length * 0.55));
-    for (let i = 0; i < limit; i++) sum += data[i];
-    return sum / limit / 255;
+    for (let i = a; i < b; i++) sum += freq[i];
+    return sum / (b - a) / 255;
   }
 
-  function frame(now, analyser) {
+  function size() {
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const cssW = canvas.clientWidth || 280;
-    const cssH = canvas.clientHeight || 72;
+    const cssH = canvas.clientHeight || 180;
     const w = Math.max(1, Math.floor(cssW * dpr));
     const h = Math.max(1, Math.floor(cssH * dpr));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
+      ribbons.forEach((ribbon) => {
+        ribbon.ready = false;
+      });
     }
-    ctx.clearRect(0, 0, w, h);
-    const data = read(analyser);
-    const avg = loudness(data);
-
-    if (reduced()) {
-      drawLevel(ctx, w, h, dpr, avg);
-      return;
-    }
-    drawParticles(ctx, w, h, dpr, data, avg, now);
+    return { ctx, dpr, w, h };
   }
 
-  function drawLevel(ctx, w, h, dpr, avg) {
-    const n = 28;
-    const gap = 3 * dpr;
+  function paintTrail(now, analyser) {
+    const box = size();
+    if (!box) return;
+    const { ctx, dpr, w, h } = box;
+    const { freq, loud } = read(analyser);
+    smoothedLoud += (loud - smoothedLoud) * 0.12;
+    const dt = 0.016;
+    washDebt += dt;
+    ctx.globalCompositeOperation = "source-over";
+    while (washDebt >= 0.1) {
+      washDebt -= 0.1;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const t = now / 1000;
+    const cx = w * 0.5;
+    const cy = h * 0.52;
+    for (const ribbon of ribbons) {
+      const energy = bandEnergy(freq, ribbon.band[0], ribbon.band[1]);
+      ribbon.energy += (energy - ribbon.energy) * 0.08;
+      const targetSwing = 0.1 + smoothedLoud * 0.55 + ribbon.energy * 0.7;
+      ribbon.swing += (targetSwing - ribbon.swing) * 0.06;
+      const x =
+        cx +
+        Math.sin(t * ribbon.freq + ribbon.phase) * ribbon.swing * w * 0.38;
+      const y =
+        cy +
+        Math.sin(t * ribbon.harm * 1.37 + ribbon.phase * 1.6) *
+          ribbon.swing *
+          h *
+          0.32;
+      const alpha = 0.12 + smoothedLoud * 0.55 + ribbon.energy * 0.4;
+      if (ribbon.ready) {
+        ctx.beginPath();
+        ctx.strokeStyle = hexAlpha(ribbon.color, Math.min(0.85, alpha));
+        ctx.lineWidth = (1 + smoothedLoud * 0.45) * dpr;
+        ctx.moveTo(ribbon.x, ribbon.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+      ribbon.x = x;
+      ribbon.y = y;
+      ribbon.ready = true;
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  function paintMeter(now, analyser) {
+    const box = size();
+    if (!box) return;
+    const { ctx, dpr, w, h } = box;
+    const { loud } = read(analyser);
+    smoothedLoud += (loud - smoothedLoud) * 0.18;
+    const breathe = 0.5 + 0.5 * Math.sin(now / 1100);
+    const level = Math.max(smoothedLoud, 0.06 + breathe * 0.05);
+    ctx.clearRect(0, 0, w, h);
+    const n = 24;
+    const gap = 4 * dpr;
     const barW = Math.max(dpr, (w - gap * (n - 1)) / n);
-    const hgt = Math.max(2 * dpr, avg * h * 0.82);
+    const hgt = Math.max(2 * dpr, level * h * 0.72);
     ctx.fillStyle = GOLD;
-    ctx.globalAlpha = 0.28 + avg * 0.62;
+    ctx.globalAlpha = 0.35 + level * 0.5;
     for (let i = 0; i < n; i++) {
       const x = i * (barW + gap);
       ctx.fillRect(x, (h - hgt) / 2, barW, hgt);
@@ -76,35 +161,9 @@ export function createVoiceMeter(canvas) {
     ctx.globalAlpha = 1;
   }
 
-  function drawParticles(ctx, w, h, dpr, data, avg, now) {
-    const voiceBins = data ? Math.max(1, Math.floor(data.length * 0.55)) : 0;
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i];
-      let target = avg;
-      if (data && voiceBins) {
-        const idx = Math.min(
-          voiceBins - 1,
-          Math.floor((i / particles.length) * voiceBins)
-        );
-        target = data[idx] / 255;
-      }
-      p.level += (target - p.level) * 0.28;
-      const floor = 0.045 + Math.sin(now / 780 + p.phase) * 0.03;
-      const amp = Math.max(floor, p.level);
-      const x = ((i + 0.5) / particles.length) * w;
-      const rise = amp * h * 0.38;
-      const y = h * 0.62 - rise;
-      const radius = (1.15 + amp * 2.4) * dpr;
-      ctx.beginPath();
-      ctx.fillStyle = GOLD;
-      ctx.globalAlpha = 0.22 + amp * 0.78;
-      ctx.shadowColor = "rgba(255, 216, 154, 0.85)";
-      ctx.shadowBlur = (4 + amp * 10) * dpr;
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    ctx.shadowBlur = 0;
+  function frame(now, analyser) {
+    if (reduced()) paintMeter(now, analyser);
+    else paintTrail(now, analyser);
   }
 
   function loop(getAnalyser) {
@@ -117,6 +176,15 @@ export function createVoiceMeter(canvas) {
     start(getAnalyser) {
       if (running) return;
       running = true;
+      washDebt = 0;
+      smoothedLoud = 0;
+      const box = size();
+      if (box) box.ctx.clearRect(0, 0, box.w, box.h);
+      ribbons.forEach((ribbon) => {
+        ribbon.ready = false;
+        ribbon.swing = 0.12;
+        ribbon.energy = 0;
+      });
       loop(getAnalyser);
     },
     stop() {
@@ -125,4 +193,12 @@ export function createVoiceMeter(canvas) {
       raf = 0;
     },
   };
+}
+
+function hexAlpha(hex, alpha) {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

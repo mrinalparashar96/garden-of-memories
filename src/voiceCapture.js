@@ -11,6 +11,25 @@ const FATAL_SPEECH_ERRORS = new Set([
   "not-allowed",
   "service-not-allowed",
 ]);
+/** Chromium builds without a speech backend fail with "network" almost immediately. */
+const QUICK_FAIL_MS = 2000;
+const BACKEND_KEY = "still-here-speech-backend-dead";
+
+function speechBackendDead() {
+  try {
+    return sessionStorage.getItem(BACKEND_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberSpeechBackendDead() {
+  try {
+    sessionStorage.setItem(BACKEND_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
 
 export function createVoiceCapture({
   onTranscript,
@@ -28,6 +47,8 @@ export function createVoiceCapture({
   let interim = "";
   let listening = false;
   let fatalSpeech = false;
+  let issueShown = false;
+  let sessionOpenedAt = 0;
   let startedAt = 0;
   let audioCtx = null;
   let analyser = null;
@@ -56,18 +77,27 @@ export function createVoiceCapture({
     mediaRecorder.start(200);
     listening = true;
     fatalSpeech = false;
+    issueShown = false;
     committed = "";
     sessionFinal = "";
     interim = "";
+    // Recognition starts only once the mic stream exists, so it isn't
+    // constructed against a contended or still-pending getUserMedia.
     startRecognition();
   }
 
-  function devLog(label, detail) {
+  function devDebug(eventName, detail) {
     try {
-      if (import.meta.env?.DEV) console.warn(`[voice] ${label}`, detail ?? "");
+      if (import.meta.env?.DEV) console.debug("[voice]", eventName, detail ?? "");
     } catch {
       /* ignore */
     }
+  }
+
+  function reportIssue() {
+    if (!listening || !isRecording() || issueShown) return;
+    issueShown = true;
+    onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
   }
 
   function joinedFinal() {
@@ -95,22 +125,30 @@ export function createVoiceCapture({
   }
 
   function startRecognition() {
-    if (!SpeechRecognition) {
-      devLog("speech recognition unavailable");
-      onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
+    if (!isRecording()) return;
+    if (!SpeechRecognition || speechBackendDead()) {
+      devDebug("speech recognition skipped", speechBackendDead() ? "remembered" : "missing");
+      if (!SpeechRecognition) rememberSpeechBackendDead();
+      reportIssue();
       return;
     }
     beginSession();
   }
 
   function beginSession() {
-    if (!listening || fatalSpeech) return;
+    if (!listening || fatalSpeech || !isRecording()) return;
+    let current;
     try {
-      recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = lang;
-      recognition.onresult = (event) => {
+      current = new SpeechRecognition();
+      recognition = current;
+      sessionOpenedAt = performance.now();
+      current.continuous = true;
+      current.interimResults = true;
+      current.lang = lang;
+      current.onstart = () => devDebug("onstart");
+      current.onaudiostart = () => devDebug("onaudiostart");
+      current.onspeechstart = () => devDebug("onspeechstart");
+      current.onresult = (event) => {
         let finals = "";
         let pending = "";
         for (let i = 0; i < event.results.length; i++) {
@@ -118,31 +156,35 @@ export function createVoiceCapture({
           if (event.results[i].isFinal) finals += piece;
           else pending += piece;
         }
+        devDebug("onresult", { final: finals, interim: pending });
         sessionFinal = finals.replace(/\s+/g, " ").trim();
         interim = pending.replace(/\s+/g, " ").trim();
         emitTranscript();
       };
-      recognition.onerror = (event) => {
+      current.onerror = (event) => {
         const code = event?.error || "unknown";
-        devLog("speech recognition error", code);
-        if (FATAL_SPEECH_ERRORS.has(code)) {
-          fatalSpeech = true;
-          onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
-        }
+        devDebug("onerror", code);
+        if (code === "no-speech" || code === "aborted") return;
+        if (!FATAL_SPEECH_ERRORS.has(code)) return;
+        fatalSpeech = true;
+        const quick = performance.now() - sessionOpenedAt <= QUICK_FAIL_MS;
+        if (code === "network" && quick) rememberSpeechBackendDead();
+        reportIssue();
       };
-      recognition.onend = () => {
-        devLog("speech recognition ended");
+      current.onend = () => {
+        devDebug("onend");
+        if (recognition === current) recognition = null;
         commitSession();
         emitTranscript();
-        recognition = null;
         if (!listening || fatalSpeech || !isRecording()) return;
         beginSession();
       };
-      recognition.start();
+      current.start();
     } catch (err) {
-      devLog("speech recognition failed to start", err);
-      recognition = null;
-      onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
+      devDebug("onerror", err?.name || "start-failed");
+      if (recognition === current) recognition = null;
+      fatalSpeech = true;
+      reportIssue();
     }
   }
 
@@ -152,9 +194,12 @@ export function createVoiceCapture({
     recognition = null;
     if (!current) return;
     try {
+      current.onstart = null;
+      current.onaudiostart = null;
+      current.onspeechstart = null;
       current.onresult = null;
       current.onerror = null;
-      current.onend = null;
+      current.onend = () => devDebug("onend");
       current.stop();
     } catch {
       /* ignore */
