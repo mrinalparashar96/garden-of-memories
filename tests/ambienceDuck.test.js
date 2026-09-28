@@ -19,4 +19,17 @@ describe("ambience duck", () => {
     ambience.unduck();
     expect(ambience.isMuted()).toBe(true);
   });
+
+  it("stays ducked until every holder has released", () => {
+    const ambience = createAmbience();
+    ambience.duck();
+    ambience.duck();
+    ambience.unduck();
+    expect(ambience.isDucked()).toBe(true);
+    ambience.unduck();
+    expect(ambience.isDucked()).toBe(false);
+    ambience.unduck();
+    expect(ambience.isDucked()).toBe(false);
+    expect(ambience.isMuted()).toBe(false);
+  });
 });

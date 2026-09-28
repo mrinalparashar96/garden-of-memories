@@ -17,7 +17,8 @@ export function createAmbience({ toggleEl } = {}) {
   let masterGain = null;
   let started = false;
   let muted = readFlag(STORAGE_KEY);
-  let ducked = false;
+  /** How many record/playback holders currently want the score quiet. */
+  let duckCount = 0;
 
   function syncToggle() {
     if (!toggleEl) return;
@@ -28,7 +29,7 @@ export function createAmbience({ toggleEl } = {}) {
 
   function desiredGain() {
     if (muted) return 0;
-    if (ducked) return DUCK_LEVEL;
+    if (duckCount > 0) return DUCK_LEVEL;
     return MASTER_VOLUME;
   }
 
@@ -45,14 +46,17 @@ export function createAmbience({ toggleEl } = {}) {
     fadeTo(desiredGain(), 0.25);
   }
 
-  /** Fade the score toward silence without touching the saved mute flag. */
+  /**
+   * Fade the score toward silence without touching the saved mute flag.
+   * Calls stack: the score stays quiet until every duck() has an unduck().
+   */
   function duck() {
-    ducked = true;
+    duckCount += 1;
     fadeTo(desiredGain(), DUCK_FADE_S);
   }
 
   function unduck() {
-    ducked = false;
+    duckCount = Math.max(0, duckCount - 1);
     fadeTo(desiredGain(), DUCK_FADE_S);
   }
 
@@ -169,6 +173,7 @@ export function createAmbience({ toggleEl } = {}) {
     duck,
     unduck,
     isMuted: () => muted,
+    isDucked: () => duckCount > 0,
     show,
     hide,
   };

@@ -3,12 +3,31 @@
  * Audio is the memory; transcript is optional and unpolished.
  */
 
-export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
+export const TRANSCRIPT_UNAVAILABLE =
+  "Live transcript isn't available right now — your recording is still being saved";
+
+const FATAL_SPEECH_ERRORS = new Set([
+  "network",
+  "not-allowed",
+  "service-not-allowed",
+]);
+
+export function createVoiceCapture({
+  onTranscript,
+  onTranscriptIssue,
+  lang = "en-AU",
+} = {}) {
   let mediaRecorder = null;
   let chunks = [];
   let stream = null;
   let recognition = null;
   let transcript = "";
+  /** Final text from finished recognition sessions. A restart wipes event.results. */
+  let committed = "";
+  let sessionFinal = "";
+  let interim = "";
+  let listening = false;
+  let fatalSpeech = false;
   let startedAt = 0;
   let audioCtx = null;
   let analyser = null;
@@ -35,42 +54,111 @@ export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
 
     startedAt = performance.now();
     mediaRecorder.start(200);
+    listening = true;
+    fatalSpeech = false;
+    committed = "";
+    sessionFinal = "";
+    interim = "";
     startRecognition();
   }
 
+  function devLog(label, detail) {
+    try {
+      if (import.meta.env?.DEV) console.warn(`[voice] ${label}`, detail ?? "");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function joinedFinal() {
+    return [committed, sessionFinal].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  function emitTranscript() {
+    const finalText = joinedFinal();
+    transcript = [finalText, interim].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    onTranscript?.({
+      text: transcript,
+      finalText,
+      interim,
+    });
+  }
+
+  function commitSession() {
+    committed = [committed, sessionFinal, interim]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    sessionFinal = "";
+    interim = "";
+  }
+
   function startRecognition() {
-    if (!SpeechRecognition) return;
+    if (!SpeechRecognition) {
+      devLog("speech recognition unavailable");
+      onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
+      return;
+    }
+    beginSession();
+  }
+
+  function beginSession() {
+    if (!listening || fatalSpeech) return;
     try {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = lang;
       recognition.onresult = (event) => {
-        let text = "";
+        let finals = "";
+        let pending = "";
         for (let i = 0; i < event.results.length; i++) {
-          text += event.results[i][0].transcript;
+          const piece = event.results[i][0]?.transcript || "";
+          if (event.results[i].isFinal) finals += piece;
+          else pending += piece;
         }
-        transcript = text.trim();
-        onTranscript?.(transcript);
+        sessionFinal = finals.replace(/\s+/g, " ").trim();
+        interim = pending.replace(/\s+/g, " ").trim();
+        emitTranscript();
       };
-      recognition.onerror = () => {
-        /* keep recording; transcript optional */
+      recognition.onerror = (event) => {
+        const code = event?.error || "unknown";
+        devLog("speech recognition error", code);
+        if (FATAL_SPEECH_ERRORS.has(code)) {
+          fatalSpeech = true;
+          onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
+        }
+      };
+      recognition.onend = () => {
+        devLog("speech recognition ended");
+        commitSession();
+        emitTranscript();
+        recognition = null;
+        if (!listening || fatalSpeech || !isRecording()) return;
+        beginSession();
       };
       recognition.start();
-    } catch {
+    } catch (err) {
+      devLog("speech recognition failed to start", err);
       recognition = null;
+      onTranscriptIssue?.(TRANSCRIPT_UNAVAILABLE);
     }
   }
 
   function stopRecognition() {
-    if (!recognition) return;
+    listening = false;
+    const current = recognition;
+    recognition = null;
+    if (!current) return;
     try {
-      recognition.onresult = null;
-      recognition.stop();
+      current.onresult = null;
+      current.onerror = null;
+      current.onend = null;
+      current.stop();
     } catch {
       /* ignore */
     }
-    recognition = null;
   }
 
   function stop() {

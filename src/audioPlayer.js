@@ -9,9 +9,9 @@ const PAUSE_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.8h
  * Custom waveform player. Native controls stay hidden.
  * Works with a data: URL or any fetchable src.
  * @param {HTMLElement} host
- * @param {{ src?: string }} [opts]
+ * @param {{ src?: string, onPlay?: () => void, onPause?: () => void }} [opts]
  */
-export function createAudioPlayer(host, { src = "" } = {}) {
+export function createAudioPlayer(host, { src = "", onPlay, onPause } = {}) {
   host.classList.add("voice-player");
   host.innerHTML = `
     <button type="button" class="voice-player-btn" data-play aria-label="Play">${PLAY_ICON}</button>
@@ -40,6 +40,19 @@ export function createAudioPlayer(host, { src = "" } = {}) {
   let decodeGen = 0;
   let raf = 0;
   let scrubbing = false;
+  let holdingDuck = false;
+
+  function holdDuck() {
+    if (holdingDuck) return;
+    holdingDuck = true;
+    onPlay?.();
+  }
+
+  function releaseDuck() {
+    if (!holdingDuck) return;
+    holdingDuck = false;
+    onPause?.();
+  }
 
   function duration() {
     const d = audio.duration;
@@ -205,16 +218,19 @@ export function createAudioPlayer(host, { src = "" } = {}) {
 
   audio.addEventListener("play", () => {
     setPlaying(true);
+    holdDuck();
     stopLoop();
     tick();
   });
   audio.addEventListener("pause", () => {
     setPlaying(false);
+    releaseDuck();
     stopLoop();
     updateTimes();
   });
   audio.addEventListener("ended", () => {
     setPlaying(false);
+    releaseDuck();
     stopLoop();
     updateTimes();
   });
@@ -246,6 +262,7 @@ export function createAudioPlayer(host, { src = "" } = {}) {
     } catch {
       /* ignore */
     }
+    releaseDuck();
     setPlaying(false);
     updateTimes();
   }

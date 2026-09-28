@@ -588,7 +588,12 @@ const ui = {
     syncSaveButton();
     if (memoryAudio) {
       if (audioDataUrl) {
-        if (!memoryPlayer) memoryPlayer = createAudioPlayer(memoryAudio);
+        if (!memoryPlayer) {
+          memoryPlayer = createAudioPlayer(memoryAudio, {
+            onPlay: () => ambience.duck(),
+            onPause: () => ambience.unduck(),
+          });
+        }
         memoryPlayer.setSource(audioDataUrl);
         memoryAudio.hidden = false;
       } else {

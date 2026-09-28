@@ -11,6 +11,7 @@ import {
 import { addMemory as persistMemory } from "../memoryStore.js";
 import { getPass } from "../pass/passStore.js";
 import { createAudioPlayer } from "../audioPlayer.js";
+import { createLanguagePicker } from "../languagePicker.js";
 import { createVoiceCapture } from "../voiceCapture.js";
 import { createVoiceMeter } from "../voiceMeter.js";
 import {
@@ -80,6 +81,19 @@ export function createAddMemory({
   let takePlayer = null;
   /** @type {ReturnType<typeof createAudioPlayer> | null} */
   let reviewPlayer = null;
+  /** @type {ReturnType<typeof createLanguagePicker> | null} */
+  let langPicker = null;
+
+  function playbackHooks() {
+    return {
+      onPlay() {
+        onRecordingStart?.();
+      },
+      onPause() {
+        onRecordingEnd?.();
+      },
+    };
+  }
 
   function disposeMedia() {
     liveMeter?.stop();
@@ -88,6 +102,8 @@ export function createAddMemory({
     takePlayer = null;
     reviewPlayer?.destroy();
     reviewPlayer = null;
+    langPicker?.destroy();
+    langPicker = null;
   }
 
   function emptyDraft() {
@@ -192,33 +208,31 @@ export function createAddMemory({
               value="${escapeAttr(draft.title)}" />
           </label>
           <div class="leave-type-wrap">
-            <textarea data-body rows="5" maxlength="${MAX_BODY_CHARS}"
-              placeholder="${
-                canVoice
-                  ? "Write a few ordinary words, or speak them."
-                  : "A few ordinary words are enough."
-              }">${escapeHtml(draft.body)}</textarea>
+            <div class="add-memory-body-shell" data-body-shell>
+              <textarea data-body rows="5" maxlength="${MAX_BODY_CHARS}"
+                placeholder="${
+                  canVoice
+                    ? "Write a few ordinary words, or speak them."
+                    : "A few ordinary words are enough."
+                }">${escapeHtml(draft.body)}</textarea>
+              <div class="add-memory-body-mirror" data-body-mirror hidden></div>
+            </div>
+            <p class="add-memory-transcript-note" data-transcript-note hidden></p>
             <p class="leave-type-count" data-count>0/${MAX_BODY_CHARS}</p>
           </div>
           ${
             canVoice
               ? `<div class="add-memory-voice" data-voice>
+              <p class="add-memory-lang-line" data-lang-line>
+                <span class="add-memory-lang-lead" aria-hidden="true">I'll speak in</span>
+                <span data-lang-picker></span>
+              </p>
               <div class="add-memory-live" data-live hidden>
                 <canvas class="add-memory-live-canvas" data-live-canvas aria-hidden="true"></canvas>
                 <p class="add-memory-live-time" data-live-time>0:00 / ${formatClock(MAX_RECORD_MS)}</p>
               </div>
               <div class="add-memory-voice-row">
                 <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
-                <label class="add-memory-voice-lang">
-                  <span class="visually-hidden">Language you'll speak</span>
-                  <select class="add-memory-lang-select" data-lang>
-                    ${VOICE_LANGUAGES.map(
-                      (l) => `<option value="${l.code}" lang="${l.code}"${
-                        l.code === draft.lang ? " selected" : ""
-                      }>${l.label}</option>`
-                    ).join("")}
-                  </select>
-                </label>
               </div>
               <div class="add-memory-voice-take" data-take hidden>
                 <div class="add-memory-player" data-take-player></div>
@@ -246,8 +260,32 @@ export function createAddMemory({
     const take = root.querySelector("[data-take]");
     const takeHost = root.querySelector("[data-take-player]");
     const takeRemove = root.querySelector("[data-take-remove]");
-    const langSelect = root.querySelector("[data-lang]");
+    const langLine = root.querySelector("[data-lang-line]");
+    const langSlot = root.querySelector("[data-lang-picker]");
+    const mirror = root.querySelector("[data-body-mirror]");
+    const shell = root.querySelector("[data-body-shell]");
+    const transcriptNote = root.querySelector("[data-transcript-note]");
     liveMeter = liveCanvas ? createVoiceMeter(liveCanvas) : null;
+
+    const paintMirror = (finalText, interimText) => {
+      if (!mirror) return;
+      const caret = `<span class="add-memory-caret" aria-hidden="true"></span>`;
+      const interimHtml = interimText
+        ? `<span class="add-memory-interim">${escapeHtml(interimText)}</span>`
+        : "";
+      mirror.innerHTML = `${escapeHtml(finalText)}${interimHtml}${caret}`;
+    };
+
+    const showTranscriptNote = (message) => {
+      if (!transcriptNote) return;
+      if (!message) {
+        transcriptNote.hidden = true;
+        transcriptNote.textContent = "";
+        return;
+      }
+      transcriptNote.hidden = false;
+      transcriptNote.textContent = message;
+    };
 
     let statusNote = "";
     const setNote = (text) => {
@@ -274,7 +312,7 @@ export function createAddMemory({
       if (!take) return;
       if (hasAudio()) {
         if (takeHost) {
-          if (!takePlayer) takePlayer = createAudioPlayer(takeHost);
+          if (!takePlayer) takePlayer = createAudioPlayer(takeHost, playbackHooks());
           takePlayer.setSource(draft.audioDataUrl);
         }
         take.hidden = false;
@@ -305,7 +343,13 @@ export function createAddMemory({
         }
       }
       if (body) body.readOnly = on;
-      if (langSelect) langSelect.disabled = on;
+      langLine?.classList.toggle("is-quiet", on);
+      langPicker?.setDisabled(on);
+      shell?.classList.toggle("is-listening", on);
+      if (mirror) {
+        mirror.hidden = !on;
+        if (on) paintMirror(draft.body.trim(), "");
+      }
       if (take && on) {
         takePlayer?.stop();
         take.hidden = true;
@@ -328,10 +372,30 @@ export function createAddMemory({
       const prefix = draft.body.trim();
       const capture = createVoiceCapture({
         lang: draft.lang,
-        onTranscript(text) {
+        onTranscript(payload) {
           if (!body) return;
-          body.value = (prefix ? `${prefix} ${text}` : text).slice(0, MAX_BODY_CHARS);
+          const spoken =
+            typeof payload === "string" ? payload : payload?.text || "";
+          const interimText =
+            typeof payload === "string" ? "" : payload?.interim || "";
+          const finalSpoken =
+            typeof payload === "string"
+              ? spoken
+              : payload?.finalText || "";
+          const combined = (prefix ? `${prefix} ${spoken}` : spoken)
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, MAX_BODY_CHARS);
+          body.value = combined;
+          const shownFinal = (prefix ? `${prefix} ${finalSpoken}` : finalSpoken)
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, MAX_BODY_CHARS);
+          paintMirror(shownFinal, interimText);
           sync();
+        },
+        onTranscriptIssue(message) {
+          showTranscriptNote(message);
         },
       });
       voice = capture;
@@ -355,6 +419,7 @@ export function createAddMemory({
         return;
       }
       statusNote = "";
+      showTranscriptNote("");
       if (status) status.textContent = "";
       recordStart = performance.now();
       setRecordingUi(true);
@@ -404,13 +469,20 @@ export function createAddMemory({
 
     const applyLang = () => {
       if (body && draft.lang) body.setAttribute("lang", draft.lang);
+      if (mirror && draft.lang) mirror.setAttribute("lang", draft.lang);
     };
     applyLang();
-    langSelect?.addEventListener("change", () => {
-      draft.lang = langSelect.value;
-      setPreferredVoiceLanguage(draft.lang);
-      applyLang();
-    });
+    if (langSlot) {
+      langPicker = createLanguagePicker(langSlot, {
+        languages: VOICE_LANGUAGES,
+        value: draft.lang,
+        onChange(code) {
+          draft.lang = code;
+          setPreferredVoiceLanguage(code);
+          applyLang();
+        },
+      });
+    }
 
     takeRemove?.addEventListener("click", () => {
       draft.audioDataUrl = "";
@@ -579,7 +651,10 @@ export function createAddMemory({
     wireChrome();
     const reviewHost = root.querySelector("[data-review-audio]");
     if (reviewHost && hasAudio()) {
-      reviewPlayer = createAudioPlayer(reviewHost, { src: draft.audioDataUrl });
+      reviewPlayer = createAudioPlayer(reviewHost, {
+        src: draft.audioDataUrl,
+        ...playbackHooks(),
+      });
     }
     garden?.highlightRegion?.(draft.region);
     root.querySelector("[data-back]")?.addEventListener("click", () => showStep(3));

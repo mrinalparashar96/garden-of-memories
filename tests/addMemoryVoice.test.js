@@ -23,8 +23,9 @@ const fakeVoice = {
 
 let lastLang = "";
 vi.mock("../src/voiceCapture.js", () => ({
-  createVoiceCapture: ({ onTranscript, lang } = {}) => {
+  createVoiceCapture: ({ onTranscript, onTranscriptIssue, lang } = {}) => {
     fakeVoice.onTranscript = onTranscript;
+    fakeVoice.onIssue = onTranscriptIssue;
     lastLang = lang;
     return fakeVoice;
   },
@@ -98,6 +99,17 @@ describe("Add memory voice input", () => {
 
     fakeVoice.onTranscript("the harbour at dusk");
     expect(q("[data-body]").value).toBe("the harbour at dusk");
+    expect(q("[data-body-mirror]").hidden).toBe(false);
+    expect(q("[data-body-mirror]").textContent).toContain("the harbour at dusk");
+
+    fakeVoice.onTranscript({
+      text: "the harbour at dusk tonight",
+      finalText: "the harbour at dusk",
+      interim: "tonight",
+    });
+    expect(q("[data-body]").value).toBe("the harbour at dusk tonight");
+    expect(q(".add-memory-interim").textContent).toBe("tonight");
+    expect(q(".add-memory-caret")).not.toBeNull();
 
     q("[data-record]").click();
     await flush();
@@ -133,27 +145,49 @@ describe("Add memory voice input", () => {
     expect(onRecordingEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a note when live transcript is unavailable", async () => {
+    q("[data-record]").click();
+    await flush();
+    fakeVoice.onIssue(
+      "Live transcript isn't available right now — your recording is still being saved"
+    );
+    const note = q("[data-transcript-note]");
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toMatch(/Live transcript isn't available/);
+    expect(q("[data-live]").hidden).toBe(false);
+  });
+
   it("records in the chosen language and remembers it", async () => {
-    const select = q("[data-lang]");
-    expect(select).not.toBeNull();
-    expect(select.value).toBe("en-AU");
-    select.value = "vi-VN";
-    select.dispatchEvent(new Event("change"));
+    const trigger = q("[data-lang]");
+    expect(trigger).not.toBeNull();
+    expect(q(".add-memory-lang-lead").textContent).toBe("I'll speak in");
+    expect(trigger.dataset.value).toBe("en-AU");
+    expect(trigger.compareDocumentPosition(q("[data-record]")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    trigger.click();
+    const option = document.querySelector('[role="option"][data-code="vi-VN"]');
+    expect(option).not.toBeNull();
+    expect(option.getAttribute("lang")).toBe("vi-VN");
+    expect(option.getAttribute("aria-selected")).toBe("false");
+    option.click();
     expect(q("[data-body]").getAttribute("lang")).toBe("vi-VN");
+    expect(q("[data-lang]").dataset.value).toBe("vi-VN");
+    expect(document.querySelector('[role="listbox"]').hidden).toBe(true);
 
     q("[data-record]").click();
     await flush();
     expect(lastLang).toBe("vi-VN");
-    expect(select.disabled).toBe(true);
+    expect(q("[data-lang-line]").classList.contains("is-quiet")).toBe(true);
+    expect(q("[data-lang]").disabled).toBe(true);
     q("[data-record]").click();
     await flush();
-    expect(select.disabled).toBe(false);
+    expect(q("[data-lang]").disabled).toBe(false);
+    expect(q("[data-lang-line]").classList.contains("is-quiet")).toBe(false);
 
-    // A fresh composer opens with the remembered language
     composer.destroy();
     composer = createAddMemory({ mount, garden: null });
     composer.open();
-    expect(q("[data-lang]").value).toBe("vi-VN");
+    expect(q("[data-lang]").dataset.value).toBe("vi-VN");
   });
 
   it("hides voice input when recording isn't supported", () => {

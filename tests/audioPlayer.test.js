@@ -18,4 +18,26 @@ describe("audio player", () => {
     expect(host.querySelector("audio")).toBeNull();
     host.remove();
   });
+
+  it("ducks once while playing and releases on pause, end, or stop", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const events = [];
+    const player = createAudioPlayer(host, {
+      onPlay: () => events.push("play"),
+      onPause: () => events.push("pause"),
+    });
+    const audio = host.querySelector("audio");
+    audio.dispatchEvent(new Event("play"));
+    audio.dispatchEvent(new Event("play"));
+    audio.dispatchEvent(new Event("pause"));
+    audio.dispatchEvent(new Event("pause"));
+    expect(events).toEqual(["play", "pause"]);
+    audio.dispatchEvent(new Event("play"));
+    audio.dispatchEvent(new Event("ended"));
+    player.stop();
+    expect(events).toEqual(["play", "pause", "play", "pause"]);
+    player.destroy();
+    host.remove();
+  });
 });
