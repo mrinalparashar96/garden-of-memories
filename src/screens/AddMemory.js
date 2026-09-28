@@ -10,11 +10,28 @@ import {
 } from "../memories.js";
 import { addMemory as persistMemory } from "../memoryStore.js";
 import { getPass } from "../pass/passStore.js";
+import { createVoiceCapture } from "../voiceCapture.js";
 
 const HOLD_MS = 1200;
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 const REGION_IDS = Object.keys(REGION_LABELS);
 const RELATIONSHIP_IDS = Object.keys(RELATIONSHIP_LABELS);
+/** Keep recordings small enough for localStorage (~0.5 MB at 60s). */
+const MAX_RECORD_MS = 60000;
+const VOICE_FALLBACK_BODY = "A voice memory.";
+
+function voiceSupported() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.MediaRecorder !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia)
+  );
+}
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
 
 /**
  * Four-step Add your memory composer + hold + arrival handoff.
@@ -40,8 +57,12 @@ export function createAddMemory({
   let holding = false;
   let holdRaf = 0;
   let holdStart = 0;
-  /** @type {{ title: string, body: string, emotion: string, relationship: string, region: string }} */
+  /** @type {{ title: string, body: string, emotion: string, relationship: string, region: string, audioDataUrl: string }} */
   let draft = emptyDraft();
+  /** @type {ReturnType<typeof createVoiceCapture> | null} */
+  let voice = null;
+  let recordTimer = 0;
+  let recordStart = 0;
 
   function emptyDraft() {
     return {
@@ -50,7 +71,28 @@ export function createAddMemory({
       emotion: "",
       relationship: "",
       region: "",
+      audioDataUrl: "",
     };
+  }
+
+  function isRecording() {
+    return Boolean(voice?.isRecording());
+  }
+
+  function hasText() {
+    return draft.body.trim().length >= MIN_BODY_CHARS;
+  }
+
+  function hasAudio() {
+    return Boolean(draft.audioDataUrl);
+  }
+
+  /** Stop and discard any in-progress recording (close / cancel). */
+  function cancelRecording() {
+    window.clearInterval(recordTimer);
+    recordTimer = 0;
+    voice?.cancel();
+    voice = null;
   }
 
   function open() {
@@ -103,6 +145,7 @@ export function createAddMemory({
   }
 
   function renderWrite() {
+    const canVoice = voiceSupported();
     root.innerHTML = `
       <section class="leave-screen leave-screen--compose add-memory-screen">
         ${chrome(1)}
@@ -116,12 +159,25 @@ export function createAddMemory({
           </label>
           <div class="leave-type-wrap">
             <textarea data-body rows="5" maxlength="${MAX_BODY_CHARS}"
-              placeholder="A few ordinary words are enough.">${escapeHtml(
-                draft.body
-              )}</textarea>
+              placeholder="${
+                canVoice
+                  ? "Write a few ordinary words, or speak them."
+                  : "A few ordinary words are enough."
+              }">${escapeHtml(draft.body)}</textarea>
             <p class="leave-type-count" data-count>0/${MAX_BODY_CHARS}</p>
           </div>
-          <p class="leave-status" data-status></p>
+          ${
+            canVoice
+              ? `<div class="add-memory-voice" data-voice>
+              <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
+              <div class="add-memory-voice-take" data-take hidden>
+                <audio class="memory-audio" data-take-audio controls></audio>
+                <button type="button" class="add-memory-voice-remove" data-take-remove>Remove recording</button>
+              </div>
+            </div>`
+              : ""
+          }
+          <p class="leave-status" data-status aria-live="polite"></p>
           <button type="button" class="pill pill--primary" data-next disabled>Next</button>
         </div>
       </section>
@@ -132,27 +188,140 @@ export function createAddMemory({
     const count = root.querySelector("[data-count]");
     const next = root.querySelector("[data-next]");
     const status = root.querySelector("[data-status]");
+    const recordBtn = root.querySelector("[data-record]");
+    const take = root.querySelector("[data-take]");
+    const takeAudio = root.querySelector("[data-take-audio]");
+    const takeRemove = root.querySelector("[data-take-remove]");
+
+    let statusNote = "";
+    const setNote = (text) => {
+      statusNote = text;
+      sync();
+    };
 
     const sync = () => {
       draft.body = (body?.value || "").slice(0, MAX_BODY_CHARS);
       draft.title = (title?.value || "").slice(0, 48);
       if (count) count.textContent = `${draft.body.length}/${MAX_BODY_CHARS}`;
       const len = draft.body.trim().length;
-      const ok = len >= MIN_BODY_CHARS && len <= MAX_BODY_CHARS;
+      const ok = !isRecording() && (hasText() || hasAudio());
       if (next) next.disabled = !ok;
-      if (status) {
-        status.textContent =
-          len > 0 && len < MIN_BODY_CHARS
-            ? `${MIN_BODY_CHARS - len} more characters…`
-            : "";
+      if (!status) return;
+      if (isRecording()) return; // timer owns the status while recording
+      if (statusNote) status.textContent = statusNote;
+      else if (!hasAudio() && len > 0 && len < MIN_BODY_CHARS) {
+        status.textContent = `${MIN_BODY_CHARS - len} more characters…`;
+      } else status.textContent = "";
+    };
+
+    const showTake = () => {
+      if (!take || !takeAudio) return;
+      if (hasAudio()) {
+        takeAudio.src = draft.audioDataUrl;
+        take.hidden = false;
+      } else {
+        takeAudio.pause?.();
+        takeAudio.removeAttribute("src");
+        take.hidden = true;
+      }
+      if (recordBtn) {
+        recordBtn.textContent = hasAudio() ? "Record again" : "Speak it instead";
       }
     };
-    body?.addEventListener("input", sync);
+
+    const setRecordingUi = (on) => {
+      if (!recordBtn) return;
+      recordBtn.classList.toggle("is-recording", on);
+      recordBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      if (on) recordBtn.textContent = "Stop";
+      if (body) body.readOnly = on;
+      if (take && on) take.hidden = true;
+    };
+
+    const tickClock = () => {
+      const elapsed = performance.now() - recordStart;
+      if (status) {
+        status.textContent = `Listening… ${formatClock(elapsed)} / ${formatClock(
+          MAX_RECORD_MS
+        )}`;
+      }
+      if (elapsed >= MAX_RECORD_MS) void stopRecording();
+    };
+
+    const startRecording = async () => {
+      // Text typed before speaking stays; the transcript is appended after it.
+      const prefix = draft.body.trim();
+      voice = createVoiceCapture({
+        onTranscript(text) {
+          if (!body) return;
+          body.value = (prefix ? `${prefix} ${text}` : text).slice(0, MAX_BODY_CHARS);
+          sync();
+        },
+      });
+      try {
+        await voice.start();
+      } catch (err) {
+        voice = null;
+        const denied =
+          err?.name === "NotAllowedError" || err?.name === "SecurityError";
+        setNote(
+          denied
+            ? "Microphone access was blocked. Allow it in your browser to record."
+            : "Couldn't start the microphone on this device."
+        );
+        return;
+      }
+      statusNote = "";
+      recordStart = performance.now();
+      setRecordingUi(true);
+      tickClock();
+      recordTimer = window.setInterval(tickClock, 250);
+      sync();
+    };
+
+    const stopRecording = async () => {
+      if (!voice) return;
+      window.clearInterval(recordTimer);
+      recordTimer = 0;
+      const current = voice;
+      voice = null;
+      const result = await current.stop();
+      setRecordingUi(false);
+      if (!result.dataUrl || result.durationMs < 800) {
+        setNote("That was too short to keep. Try again.");
+        showTake();
+        return;
+      }
+      draft.audioDataUrl = result.dataUrl;
+      showTake();
+      setNote(
+        result.transcript
+          ? "Recorded. Edit the words above if anything came out wrong."
+          : "Recorded. Add a few words above if you like."
+      );
+    };
+
+    recordBtn?.addEventListener("click", () => {
+      if (isRecording()) void stopRecording();
+      else void startRecording();
+    });
+
+    takeRemove?.addEventListener("click", () => {
+      draft.audioDataUrl = "";
+      showTake();
+      setNote("");
+    });
+
+    body?.addEventListener("input", () => {
+      statusNote = "";
+      sync();
+    });
     title?.addEventListener("input", sync);
+    showTake();
     sync();
     requestAnimationFrame(() => body?.focus());
     next?.addEventListener("click", () => {
-      if (next.disabled) return;
+      if (next.disabled || isRecording()) return;
       showStep(2);
     });
   }
@@ -266,17 +435,26 @@ export function createAddMemory({
   }
 
   function renderLeave() {
-    const preview =
-      draft.body.trim().length > 160
-        ? `${draft.body.trim().slice(0, 157)}…`
-        : draft.body.trim();
+    const text = draft.body.trim();
+    const preview = text.length > 160 ? `${text.slice(0, 157)}…` : text;
     root.innerHTML = `
       <section class="leave-screen leave-screen--compose add-memory-screen add-memory-screen--leave">
         ${chrome(4)}
         <div class="leave-screen-inner">
           <p class="leave-kicker">Ready</p>
           <h1 class="leave-hero">Leave it here.</h1>
-          <blockquote class="add-memory-review">${escapeHtml(preview)}</blockquote>
+          ${
+            preview
+              ? `<blockquote class="add-memory-review">${escapeHtml(preview)}</blockquote>`
+              : ""
+          }
+          ${
+            hasAudio()
+              ? `<audio class="memory-audio add-memory-review-audio" controls src="${escapeAttr(
+                  draft.audioDataUrl
+                )}"></audio>`
+              : ""
+          }
           <p class="add-memory-review-meta">
             ${escapeHtml(draft.emotion)} · ${escapeHtml(
               RELATIONSHIP_LABELS[draft.relationship] || ""
@@ -360,7 +538,8 @@ export function createAddMemory({
     if (holdBtn) holdBtn.disabled = true;
     if (status) status.textContent = "Leaving…";
 
-    const body = draft.body.trim().slice(0, MAX_BODY_CHARS);
+    const typed = draft.body.trim().slice(0, MAX_BODY_CHARS);
+    const body = typed || VOICE_FALLBACK_BODY;
     const title = (draft.title.trim() || autoTitleFromBody(body)).slice(0, 48);
     const pass = getPass();
     const landing = garden?.resolveLandingPosition?.(draft.region) || null;
@@ -380,8 +559,14 @@ export function createAddMemory({
       landingPulseMs: 10000,
     };
     if (landing) memory.position = landing;
+    if (hasAudio()) memory.audioDataUrl = draft.audioDataUrl;
 
-    const { ok, memory: saved } = persistMemory(memory);
+    const { ok, audioDropped, memory: saved } = persistMemory(memory);
+    if (audioDropped) {
+      console.warn(
+        "Storage is full: the memory was saved without its recording."
+      );
+    }
     if (!ok) {
       casting = false;
       if (holdBtn) holdBtn.disabled = false;
@@ -436,6 +621,7 @@ export function createAddMemory({
 
   function close({ cancel = true, castId = null } = {}) {
     if (!active && !casting) return;
+    cancelRecording();
     window.cancelAnimationFrame(holdRaf);
     holding = false;
     active = false;

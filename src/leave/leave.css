@@ -317,3 +317,61 @@
   align-items: center;
   text-align: center;
 }
+
+/* Voice input on the Add memory composer */
+.add-memory-voice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+}
+
+.add-memory-voice .pill--ghost[data-record].is-recording {
+  animation: add-memory-listening 1.6s ease-in-out infinite;
+}
+
+@keyframes add-memory-listening {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(196, 168, 130, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 0.45rem rgba(196, 168, 130, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .add-memory-voice .pill--ghost[data-record].is-recording {
+    animation: none;
+  }
+}
+
+.add-memory-voice-take {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.add-memory-voice-remove {
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  background: none;
+  color: var(--paper-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+.add-memory-voice-remove:hover,
+.add-memory-voice-remove:focus-visible {
+  color: var(--paper);
+}
+
+.add-memory-review-audio {
+  margin: 0 0 1rem;
+}
