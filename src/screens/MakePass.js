@@ -6,6 +6,7 @@ import {
 import { renderPassCard, updatePassCardEl } from "../pass/PassCard.js";
 import { createPass, getPass, updatePass } from "../pass/passStore.js";
 import { playPassReady } from "../pass/passReady.js";
+import { mountWalletOffer } from "../walletPass.js";
 
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 const HOLD_MS = 1500;
@@ -308,6 +309,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
             ${renderPassCard(pass, { showMeta: true })}
           </div>
           <p class="make-pass-ready-line">Your pass is ready. Take it somewhere.</p>
+          <div class="wallet-offer" data-wallet></div>
           <div class="make-pass-actions">
             <button type="button" class="pill pill--primary" data-map>Back to the map</button>
             <button type="button" class="pill pill--ghost" data-edit>Edit pass</button>
@@ -326,6 +328,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
     root.querySelector("[data-edit]")?.addEventListener("click", () => {
       showEdit(pass);
     });
+    mountWalletOffer(root.querySelector("[data-wallet]"), pass);
 
     const cardEl = root.querySelector("[data-pass-card]");
     if (fromReady) {
@@ -363,6 +366,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
               ).join("")}
             </div>
             <button type="button" class="pill pill--primary" data-save>Save</button>
+            <div class="wallet-offer" data-wallet></div>
           </div>
           ${previewHtml(pass, { showMeta: true })}
         </div>
@@ -373,6 +377,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
     const count = root.querySelector("[data-count]");
     const cardEl = root.querySelector("[data-pass-card]");
     input?.focus();
+    mountWalletOffer(root.querySelector("[data-wallet]"), pass);
 
     const sync = () => {
       draft.name = (input?.value || "").slice(0, MAX_PASS_NAME);

@@ -1,6 +1,7 @@
 import { renderPassCard } from "../pass/PassCard.js";
 import { loadPass } from "../pass/passStore.js";
 import { memoryCountLabel } from "../memories.js";
+import { mountWalletOffer } from "../walletPass.js";
 
 const PLACES = [
   {
@@ -55,6 +56,7 @@ export function createLocations({
           pass
             ? `<div class="locations-pass" data-edit-wrap>
                 ${renderPassCard(pass, { compact: true, interactive: true })}
+                <div class="wallet-offer" data-wallet></div>
               </div>`
             : ""
         }
@@ -87,6 +89,7 @@ export function createLocations({
     root.querySelector("[data-pass-card]")?.addEventListener("click", () => {
       onEditPass?.();
     });
+    if (pass) mountWalletOffer(root.querySelector("[data-wallet]"), pass);
     root.querySelector('[data-place="opera-house"]')?.addEventListener(
       "click",
       () => onOpenGarden?.()

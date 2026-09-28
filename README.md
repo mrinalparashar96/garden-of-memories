@@ -16,6 +16,22 @@ npm run dev
 
 Open the local URL (default `http://localhost:5173`).
 
+## Apple Wallet
+
+A finished Memory Pass can be saved to Apple Wallet. Signing happens in `api/wallet-pass.js` on Vercel. The browser never sees `WALLETWALLET_API_KEY`.
+
+1. Copy `.env.example` to `.env` and set `WALLETWALLET_API_KEY` to a key from [walletwallet.dev](https://walletwallet.dev).
+2. In the Vercel project, add the same variable (Production and Preview). Do not commit `.env`.
+3. Deploy the repo. Vercel serves `api/wallet-pass.js` and rewrites `/wallet` to the app.
+
+`npm run dev` only runs Vite, so it cannot sign a pass. From this folder, with the [Vercel CLI](https://vercel.com/docs/cli) installed and the env var available:
+
+```bash
+vercel dev
+```
+
+Open the printed URL, make a pass, and on Safari use **Add to Apple Wallet**. The request should return `application/vnd.apple.pkpass`. On Chrome, confirm the QR instead. After deploy, add the pass once on an iPhone, edit the name, add it again, and check that Wallet updates the same card (the pass id in the QR stays `SH-….`). Strip artwork is `public/assets/pass/strip/` at 1125×369.
+
 ## GitHub
 
 git add .

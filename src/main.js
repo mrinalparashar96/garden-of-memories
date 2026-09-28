@@ -10,6 +10,12 @@ import { createOpener } from "./screens/Opener.js";
 import { createHowItWorks, hasCompletedWalkthrough } from "./screens/HowItWorks.js";
 import { createLocations } from "./screens/Locations.js";
 import { createMakePass } from "./screens/MakePass.js";
+import {
+  addPassToWallet,
+  canAddToAppleWallet,
+  passFromWalletSearch,
+  WALLET_ERROR,
+} from "./walletPass.js";
 import { createAddMemory } from "./screens/AddMemory.js";
 import { createAmbience } from "./ambience.js";
 import { createAudioPlayer } from "./audioPlayer.js";
@@ -1094,7 +1100,31 @@ function openMemoryPass(opts = {}) {
   makePass?.open(opts);
 }
 
+async function redeemWalletLink() {
+  const path = location.pathname.replace(/\/+$/, "");
+  if (!path.endsWith("/wallet")) return;
+  const note = document.createElement("p");
+  note.className = "wallet-route-note";
+  document.body.appendChild(note);
+  const pass = passFromWalletSearch(location.search);
+  if (!pass) {
+    note.textContent = "This pass link is incomplete.";
+    return;
+  }
+  if (!canAddToAppleWallet()) {
+    note.textContent = "Open this link on your iPhone to add the pass.";
+    return;
+  }
+  note.textContent = "Opening your pass…";
+  try {
+    await addPassToWallet(pass, note);
+  } catch {
+    note.textContent = WALLET_ERROR;
+  }
+}
+
 function boot() {
+  void redeemWalletLink();
   opener = createOpener({
     mount: shellMount || app,
     onEnter: () => enterMap({ startWalkthrough: true }),

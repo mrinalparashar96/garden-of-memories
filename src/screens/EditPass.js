@@ -1,6 +1,7 @@
 import { AURAS, MAX_PASS_NAME } from "../pass/auras.js";
 import { loadPass, savePass } from "../pass/passStore.js";
 import { renderPassCard, updatePassCardEl } from "../pass/PassCard.js";
+import { mountWalletOffer } from "../walletPass.js";
 
 /**
  * Edit Pass — pre-filled name + aura; Save changes (no ripple).
@@ -57,6 +58,7 @@ export function createEditPass({ mount, onSave, overlay = false }) {
         <button type="button" class="pill pill--primary" data-save>
           Save changes
         </button>
+        <div class="wallet-offer" data-wallet></div>
       </section>
     `;
 
@@ -87,6 +89,7 @@ export function createEditPass({ mount, onSave, overlay = false }) {
       const saved = savePass({ name: draft.name.trim(), aura: draft.aura });
       if (saved) onSave?.(saved);
     });
+    if (existing?.id) mountWalletOffer(root.querySelector("[data-wallet]"), existing);
     refresh();
   }
 

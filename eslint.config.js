@@ -8,6 +8,14 @@ export default [
   },
   js.configs.recommended,
   {
+    files: ["api/**/*.js"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
