@@ -53,7 +53,11 @@ async function updateOrCreate(serial, fields, key) {
     body: JSON.stringify(fields),
   });
   if (put.status === 404) return createBundle(fields, key);
-  if (!put.ok) throw new Error(`Wallet update ${put.status}: ${await responseText(put)}`);
+  if (!put.ok) {
+    const text = await responseText(put);
+    console.error("WalletWallet update body:", text);
+    throw new Error(`Wallet update ${put.status}: ${text}`);
+  }
   const existing = await fetch(`${WALLET_API}/api/passes/${encodeURIComponent(serial)}?format=binary`, {
     headers: { Authorization: `Bearer ${key}`, Accept: "application/vnd.apple.pkpass" },
   });
@@ -71,7 +75,9 @@ async function createBundle(fields, key) {
   });
   const bundled = await readBundle(res);
   if (!bundled?.bytes) {
-    throw new Error(`Wallet create ${res.status}: ${bundled?.errorText || ""}`);
+    const text = bundled?.errorText || "";
+    console.error("WalletWallet create body:", text);
+    throw new Error(`Wallet create ${res.status}: ${text}`);
   }
   return bundled;
 }
@@ -86,7 +92,7 @@ function auth(key) {
 
 async function responseText(res) {
   try {
-    return (await res.text()).slice(0, 1200);
+    return await res.text();
   } catch {
     return "";
   }
