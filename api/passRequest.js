@@ -59,7 +59,9 @@ export function requestOrigin(req) {
 export function buildWalletBody(pass, origin) {
   const root = origin.replace(/\/$/, "");
   return {
-    logoText: "",
+    // WalletWallet rejects an empty logoText. A zero-width space keeps the
+    // wordmark as the only visible name beside the logo.
+    logoText: "\u200b",
     description: "Garden of Memories pass",
     organizationName: "Garden of Memories",
     // Only a background hex is accepted. Foreground and label colours are derived.

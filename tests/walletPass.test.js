@@ -63,7 +63,7 @@ describe("Wallet pass request", () => {
 
   it("mirrors the in-app card fields", () => {
     const body = buildWalletBody(pass, "https://garden.example");
-    expect(body.logoText).toBe("");
+    expect(body.logoText).toBe("\u200b");
     expect(body.color).toBe("#000000");
     expect(body.barcodeValue).toBeUndefined();
     expect(body.barcodeFormat).toBeUndefined();

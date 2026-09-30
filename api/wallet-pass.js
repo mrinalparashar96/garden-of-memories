@@ -38,8 +38,11 @@ export default async function handler(req, res) {
     res.setHeader("Access-Control-Expose-Headers", "X-Wallet-Serial");
     res.end(issued.bytes);
   } catch (err) {
-    console.error("Wallet pass failed:", err instanceof Error ? err.message : err);
-    return sendJson(res, 502, { error: QUIET });
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error("Wallet pass failed:", detail);
+    const body = { error: QUIET };
+    if (process.env.VERCEL_ENV !== "production") body.detail = detail;
+    return sendJson(res, 502, body);
   }
 }
 
@@ -50,7 +53,7 @@ async function updateOrCreate(serial, fields, key) {
     body: JSON.stringify(fields),
   });
   if (put.status === 404) return createBundle(fields, key);
-  if (!put.ok) throw new Error(`Wallet update ${put.status}`);
+  if (!put.ok) throw new Error(`Wallet update ${put.status}: ${await responseText(put)}`);
   const existing = await fetch(`${WALLET_API}/api/passes/${encodeURIComponent(serial)}?format=binary`, {
     headers: { Authorization: `Bearer ${key}`, Accept: "application/vnd.apple.pkpass" },
   });
@@ -67,7 +70,9 @@ async function createBundle(fields, key) {
     body: JSON.stringify(fields),
   });
   const bundled = await readBundle(res);
-  if (!bundled?.bytes) throw new Error(`Wallet create ${res.status}`);
+  if (!bundled?.bytes) {
+    throw new Error(`Wallet create ${res.status}: ${bundled?.errorText || ""}`);
+  }
   return bundled;
 }
 
@@ -79,9 +84,17 @@ function auth(key) {
   };
 }
 
+async function responseText(res) {
+  try {
+    return (await res.text()).slice(0, 1200);
+  } catch {
+    return "";
+  }
+}
+
 async function readBundle(res) {
-  if (!res.ok) return null;
   const type = res.headers.get("content-type") || "";
+  if (!res.ok) return { errorText: await responseText(res) };
   if (type.includes("json")) {
     const data = await res.json();
     if (!data?.applePass) return null;
