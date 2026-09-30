@@ -16,6 +16,7 @@
   "dependencies": {
     "gsap": "^3.12.7",
     "qrcode-generator": "^2.0.4",
+    "sharp": "^0.35.5",
     "three": "^0.170.0"
   },
   "devDependencies": {
@@ -23,7 +24,6 @@
     "eslint": "^9.39.5",
     "globals": "^17.12.0",
     "jsdom": "^30.1.1",
-    "sharp": "^0.35.5",
     "vite": "^6.0.0",
     "vitest": "^5.0.1"
   }

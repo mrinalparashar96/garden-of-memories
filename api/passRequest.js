@@ -62,17 +62,17 @@ export function buildWalletBody(pass, origin) {
     logoText: "",
     description: "Garden of Memories pass",
     organizationName: "Garden of Memories",
-    // WalletWallet only accepts a background hex. Foreground and label
-    // colours are derived from it, not set independently.
+    // Only a background hex is accepted. Foreground and label colours are derived.
     color: "#000000",
     logoURL: `${root}/assets/pass/logo.png`,
     iconURL: `${root}/assets/pass/icon.png`,
-    stripURL: `${root}/assets/pass/strip/${pass.art}.jpg`,
+    stripURL: `${root}/api/pass-strip?id=${encodeURIComponent(pass.id)}&art=${encodeURIComponent(pass.art)}`,
+    headerFields: [{ label: "STILL HERE", value: "\u00a0" }],
     primaryFields: [{ label: "MEMORY PASS", value: pass.name }],
     secondaryFields: [
-      { label: "PASS NO.", value: shortPassId(pass.id) },
+      { label: "SYDNEY OPERA HOUSE", value: "\u00a0" },
+      { label: "PASS NO.", value: formatPassId(pass.id) },
       { label: "ISSUED", value: formatIssuedDate(pass.issuedAt) },
-      { label: "PLACE", value: "Opera House" },
     ],
     backFields: [
       {
@@ -82,11 +82,4 @@ export function buildWalletBody(pass, origin) {
     ],
     sharingProhibited: true,
   };
-}
-
-/** SH-7199-ABCD → SH-7199 */
-function shortPassId(id) {
-  const parts = formatPassId(id).split("-");
-  if (parts.length < 2) return formatPassId(id);
-  return `${parts[0]}-${parts[1]}`;
 }

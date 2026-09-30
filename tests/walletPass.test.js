@@ -6,6 +6,7 @@ import {
   walletPageUrl,
 } from "../src/walletPass.js";
 import { buildWalletBody, validatePassBody } from "../api/passRequest.js";
+import { formatIssuedDate } from "../src/pass/passArt.js";
 
 const pass = {
   id: "SH-AB12-CD34",
@@ -66,15 +67,18 @@ describe("Wallet pass request", () => {
     expect(body.color).toBe("#000000");
     expect(body.barcodeValue).toBeUndefined();
     expect(body.barcodeFormat).toBeUndefined();
-    expect(body.stripURL).toBe("https://garden.example/assets/pass/strip/pass-02.jpg");
+    expect(body.stripURL).toBe(
+      "https://garden.example/api/pass-strip?id=SH-AB12-CD34&art=pass-02"
+    );
+    expect(body.headerFields[0].label).toBe("STILL HERE");
     expect(body.primaryFields[0]).toEqual({ label: "MEMORY PASS", value: "ADA" });
     expect(body.secondaryFields.map((f) => f.label)).toEqual([
+      "SYDNEY OPERA HOUSE",
       "PASS NO.",
       "ISSUED",
-      "PLACE",
     ]);
-    expect(body.secondaryFields[0].value).toBe("SH-AB12");
-    expect(body.secondaryFields[2].value).toBe("Opera House");
+    expect(body.secondaryFields[1].value).toBe("SH-AB12-CD34");
+    expect(body.secondaryFields[2].value).toBe(formatIssuedDate(pass.issuedAt));
     expect(body.backFields[0].label).toBe("About this pass");
     expect(body.backFields[0].value).toMatch(/SH-AB12-CD34/);
     expect(body.backFields[0].value).toMatch(/https:\/\/garden\.example\//);
