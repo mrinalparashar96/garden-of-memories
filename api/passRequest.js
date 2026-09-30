@@ -51,37 +51,42 @@ export function requestOrigin(req) {
 }
 
 /**
- * WalletWallet pass body. Same id → same barcode, so a later PUT updates the card.
+ * WalletWallet pass body. The pass id stays stable so a later PUT updates the card.
+ * Barcode fields are omitted: WalletWallet treats a missing barcodeValue as no code.
  * @param {{ id: string, name: string, art: string, issuedAt: number }} pass
  * @param {string} origin
  */
 export function buildWalletBody(pass, origin) {
   const root = origin.replace(/\/$/, "");
-  const passUrl = `${root}/?pass=${encodeURIComponent(pass.id)}`;
   return {
-    barcodeValue: passUrl,
-    barcodeFormat: "QR",
-    barcodeAltText: formatPassId(pass.id),
-    logoText: "Garden of Memories",
+    logoText: "",
     description: "Garden of Memories pass",
     organizationName: "Garden of Memories",
+    // WalletWallet only accepts a background hex. Foreground and label
+    // colours are derived from it, not set independently.
     color: "#000000",
-    colorPreset: "dark",
     logoURL: `${root}/assets/pass/logo.png`,
     iconURL: `${root}/assets/pass/icon.png`,
     stripURL: `${root}/assets/pass/strip/${pass.art}.jpg`,
-    primaryFields: [{ label: "NAME", value: pass.name }],
+    primaryFields: [{ label: "MEMORY PASS", value: pass.name }],
     secondaryFields: [
-      { label: "PASS", value: formatPassId(pass.id) },
+      { label: "PASS NO.", value: shortPassId(pass.id) },
       { label: "ISSUED", value: formatIssuedDate(pass.issuedAt) },
+      { label: "PLACE", value: "Opera House" },
     ],
     backFields: [
       {
-        label: "ABOUT",
-        value:
-          "A Memory Pass for the Garden of Memories. The name on the front is the name left with a memory at the Sydney Opera House.",
+        label: "About this pass",
+        value: `Your Memory Pass for the Garden of Memories at the Sydney Opera House. It keeps the memories you leave and the ones you keep.\n\n${formatPassId(pass.id)}\n${root}/`,
       },
     ],
     sharingProhibited: true,
   };
+}
+
+/** SH-7199-ABCD → SH-7199 */
+function shortPassId(id) {
+  const parts = formatPassId(id).split("-");
+  if (parts.length < 2) return formatPassId(id);
+  return `${parts[0]}-${parts[1]}`;
 }

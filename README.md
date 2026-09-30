@@ -30,7 +30,7 @@ A finished Memory Pass can be saved to Apple Wallet. Signing happens in `api/wal
 vercel dev
 ```
 
-Open the printed URL, make a pass, and on Safari use **Add to Apple Wallet**. The request should return `application/vnd.apple.pkpass`. On Chrome, confirm the QR instead. After deploy, add the pass once on an iPhone, edit the name, add it again, and check that Wallet updates the same card (the pass id in the QR stays `SH-….`). Strip artwork is `public/assets/pass/strip/` at 1125×369.
+Open the printed URL, make a pass, and on Safari use **Add to Apple Wallet**. The request should return `application/vnd.apple.pkpass`. On Chrome, confirm the QR instead. After deploy, add the pass once on an iPhone, edit the name, add it again, and check that Wallet updates the same card (the pass id in the QR stays `SH-….`). Strip artwork is `public/assets/pass/strip/` at 1125×369. Regenerate the strips and the wordmark with `npm run pass-assets`.
 
 ## GitHub
 

@@ -62,14 +62,21 @@ describe("Wallet pass request", () => {
 
   it("mirrors the in-app card fields", () => {
     const body = buildWalletBody(pass, "https://garden.example");
-    expect(body.logoText).toBe("Garden of Memories");
+    expect(body.logoText).toBe("");
     expect(body.color).toBe("#000000");
+    expect(body.barcodeValue).toBeUndefined();
+    expect(body.barcodeFormat).toBeUndefined();
     expect(body.stripURL).toBe("https://garden.example/assets/pass/strip/pass-02.jpg");
-    expect(body.primaryFields[0]).toEqual({ label: "NAME", value: "ADA" });
-    expect(body.secondaryFields.map((f) => f.label)).toEqual(["PASS", "ISSUED"]);
-    expect(body.secondaryFields[0].value).toBe("SH-AB12-CD34");
-    expect(body.barcodeFormat).toBe("QR");
-    expect(body.barcodeValue).toBe("https://garden.example/?pass=SH-AB12-CD34");
-    expect(body.backFields[0].value).toMatch(/Memory Pass/);
+    expect(body.primaryFields[0]).toEqual({ label: "MEMORY PASS", value: "ADA" });
+    expect(body.secondaryFields.map((f) => f.label)).toEqual([
+      "PASS NO.",
+      "ISSUED",
+      "PLACE",
+    ]);
+    expect(body.secondaryFields[0].value).toBe("SH-AB12");
+    expect(body.secondaryFields[2].value).toBe("Opera House");
+    expect(body.backFields[0].label).toBe("About this pass");
+    expect(body.backFields[0].value).toMatch(/SH-AB12-CD34/);
+    expect(body.backFields[0].value).toMatch(/https:\/\/garden\.example\//);
   });
 });

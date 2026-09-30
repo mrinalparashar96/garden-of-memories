@@ -8,7 +8,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ["api/**/*.js"],
+    files: ["api/**/*.js", "scripts/**/*.mjs"],
     languageOptions: {
       globals: {
         ...globals.node,
