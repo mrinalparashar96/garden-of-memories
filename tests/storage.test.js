@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearKeysWithPrefix,
   readFlag,
   readJson,
   remove,
@@ -71,5 +72,17 @@ describe("readFlag / writeFlag / remove", () => {
       throw new DOMException("Blocked", "SecurityError");
     });
     expect(readFlag("flag-b")).toBe(false);
+  });
+});
+
+describe("clearKeysWithPrefix", () => {
+  it("removes only keys under the prefix", () => {
+    localStorage.setItem("stillhere.pass", "{}");
+    localStorage.setItem("stillhere.voice.lang", "\"en-AU\"");
+    localStorage.setItem("still-here-walkthrough-v2", "1");
+    clearKeysWithPrefix("stillhere.");
+    expect(localStorage.getItem("stillhere.pass")).toBeNull();
+    expect(localStorage.getItem("stillhere.voice.lang")).toBeNull();
+    expect(localStorage.getItem("still-here-walkthrough-v2")).toBe("1");
   });
 });

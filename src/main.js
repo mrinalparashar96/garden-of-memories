@@ -27,7 +27,17 @@ import {
 } from "./bookmarkStore.js";
 import { normalizeEmotion } from "./emotions.js";
 import gsap from "gsap";
+import { consumeFreshStart, showFreshStart } from "./freshStart.js";
 import "./arrival/arrival.css";
+
+if (typeof location !== "undefined" && typeof history !== "undefined") {
+  const remaining = consumeFreshStart(location.search);
+  if (remaining !== null) {
+    const next = `${location.pathname}${remaining ? `?${remaining}` : ""}${location.hash}`;
+    history.replaceState(null, "", next);
+    if (typeof document !== "undefined") showFreshStart();
+  }
+}
 
 /**
  * Flow: Opener → Sydney map → Opera House garden → How / Why / Pass / Leave

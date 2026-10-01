@@ -1,7 +1,7 @@
 /** Local persistence for saved / bookmarked memories. */
 
 import { normalizeEmotion } from "./emotions.js";
-import { readJson, writeJson } from "./core/storage.js";
+import { readJson, remove, writeJson } from "./core/storage.js";
 
 const STORAGE_KEY = "still-here-bookmarks-v1";
 
@@ -27,6 +27,10 @@ function normalizeBookmark(b) {
     place: String(b.place || "Opera House"),
     savedAt: Number(b.savedAt) || Date.now(),
   };
+}
+
+export function clearBookmarks() {
+  remove(STORAGE_KEY);
 }
 
 export function isBookmarked(id) {

@@ -1150,6 +1150,28 @@
   line-height: 1.4;
 }
 
+.make-pass-remove {
+  display: flex;
+  justify-content: center;
+  margin-top: 2.75rem;
+}
+
+.make-pass-hold--quiet {
+  width: 11.5rem;
+  height: 2.7rem;
+  background: transparent;
+  color: rgba(242, 242, 242, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.make-pass-hold--quiet .make-pass-hold-ring {
+  inset: 0;
+}
+
+.make-pass-hold--quiet .make-pass-hold-label {
+  max-width: none;
+}
+
 .make-pass-finished {
   display: flex;
   flex-direction: column;

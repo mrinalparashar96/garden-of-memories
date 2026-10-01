@@ -61,3 +61,17 @@ export function remove(key) {
     /* ignore */
   }
 }
+
+/** Remove every localStorage key that starts with `prefix` (for example `stillhere.`). */
+export function clearKeysWithPrefix(prefix) {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
