@@ -10,7 +10,7 @@ const SERIAL = /^[A-Za-z0-9-]{8,80}$/;
 
 /**
  * @param {unknown} raw
- * @returns {{ id: string, name: string, art: string, issuedAt: number, serial: string } | null}
+ * @returns {{ id: string, name: string, art: string, issuedAt: number, serial: string, memoriesLeft: number, memoriesKept: number } | null}
  */
 export function validatePassBody(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -30,7 +30,15 @@ export function validatePassBody(raw) {
     art,
     issuedAt,
     serial: SERIAL.test(serial) ? serial : "",
+    memoriesLeft: countField(raw.memoriesLeft),
+    memoriesKept: countField(raw.memoriesKept),
   };
+}
+
+function countField(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(9999, Math.floor(n));
 }
 
 /**
@@ -53,7 +61,7 @@ export function requestOrigin(req) {
 /**
  * WalletWallet pass body. The pass id stays stable so a later PUT updates the card.
  * Barcode fields are omitted: WalletWallet treats a missing barcodeValue as no code.
- * @param {{ id: string, name: string, art: string, issuedAt: number }} pass
+ * @param {{ id: string, name: string, art: string, issuedAt: number, memoriesLeft: number, memoriesKept: number }} pass
  * @param {string} origin
  */
 export function buildWalletBody(pass, origin) {
@@ -68,19 +76,22 @@ export function buildWalletBody(pass, origin) {
     color: "#000000",
     logoURL: `${root}/assets/pass/logo.png`,
     iconURL: `${root}/assets/pass/icon.png`,
-    stripURL: `${root}/api/pass-strip?id=${encodeURIComponent(pass.id)}&art=${encodeURIComponent(pass.art)}`,
+    stripURL: `${root}/api/pass-strip?id=${encodeURIComponent(pass.id)}&art=${encodeURIComponent(pass.art)}&name=${encodeURIComponent(pass.name)}`,
     headerFields: [{ label: "STILL HERE", value: "\u00a0" }],
-    primaryFields: [{ label: "MEMORY PASS", value: pass.name }],
     secondaryFields: [
       { label: "SYDNEY OPERA HOUSE", value: "\u00a0" },
       { label: "PASS NO.", value: formatPassId(pass.id) },
       { label: "ISSUED", value: formatIssuedDate(pass.issuedAt) },
     ],
+    // WalletWallet has no auxiliaryFields. The counts ride on the back so a
+    // later PUT with the same serial can refresh them.
     backFields: [
       {
         label: "About this pass",
         value: `Your Memory Pass for the Garden of Memories at the Sydney Opera House. It keeps the memories you leave and the ones you keep.\n\n${formatPassId(pass.id)}\n${root}/`,
       },
+      { label: "MEMORIES LEFT", value: String(pass.memoriesLeft) },
+      { label: "MEMORIES KEPT", value: String(pass.memoriesKept) },
     ],
     sharingProhibited: true,
   };

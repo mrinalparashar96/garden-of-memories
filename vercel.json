@@ -2,7 +2,7 @@
   "rewrites": [{ "source": "/wallet", "destination": "/index.html" }],
   "functions": {
     "api/pass-strip.js": {
-      "includeFiles": "public/assets/pass/pass-*.jpg"
+      "includeFiles": "{public/assets/pass/pass-*.jpg,public/fonts/SpaceMono-Regular.ttf}"
     }
   }
 }

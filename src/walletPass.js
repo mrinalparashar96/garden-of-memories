@@ -1,4 +1,6 @@
 import qrcode from "qrcode-generator";
+import { loadBookmarks } from "./bookmarkStore.js";
+import { getMemories } from "./memoryStore.js";
 import { PASS_ART_IDS, MAX_PASS_NAME } from "./pass/passArt.js";
 import { getPass } from "./pass/passStore.js";
 
@@ -115,7 +117,7 @@ export async function addPassToWallet(pass, statusEl) {
     const res = await fetch("/api/wallet-pass", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...pass, serial: readSerial(pass.id) }),
+      body: JSON.stringify(walletRequestBody(pass)),
     });
     const serial = res.headers.get("X-Wallet-Serial");
     if (serial) writeSerial(pass.id, serial);
@@ -140,6 +142,20 @@ export async function addPassToWallet(pass, statusEl) {
   } finally {
     if (button) button.removeAttribute("disabled");
   }
+}
+
+/**
+ * The phone that adds the pass sends its own local counts so a later add
+ * updates the same Wallet card.
+ * @param {{ id: string, name: string, art: string, issuedAt: number }} pass
+ */
+export function walletRequestBody(pass) {
+  return {
+    ...pass,
+    serial: readSerial(pass.id),
+    memoriesLeft: getMemories().length,
+    memoriesKept: loadBookmarks().length,
+  };
 }
 
 function setStatus(el, text) {

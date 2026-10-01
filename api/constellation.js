@@ -1,6 +1,9 @@
-/** Store-card strip at 3×. Coupon (375×144) is not offered by WalletWallet. */
+/** Coupon strip at 3× (375×144 pt). WalletWallet still uses store-card layout when a strip URL is set. */
 export const STRIP_W = 1125;
-export const STRIP_H = 369;
+export const STRIP_H = 432;
+/** Artwork sits slightly right of centre so the name can occupy the bottom-left. */
+export const ART_CX = 0.58;
+export const ART_CY = 0.46;
 const SCALE = 3;
 
 /**
@@ -11,8 +14,8 @@ const SCALE = 3;
  */
 export function constellationLayout(passId, width = STRIP_W, height = STRIP_H) {
   const rand = mulberry32(hashString(String(passId || "")));
-  const cx = width * 0.5;
-  const cy = height * 0.44;
+  const cx = width * ART_CX;
+  const cy = height * ART_CY;
 
   const far = [];
   for (let i = 0; i < 140; i++) {
@@ -31,10 +34,10 @@ export function constellationLayout(passId, width = STRIP_W, height = STRIP_H) {
   const mid = [];
   for (let i = 0; i < 70; i++) {
     const angle = rand() * Math.PI * 2;
-    const jitter = 0.78 + rand() * 0.4;
+    const jitter = 0.9 + rand() * 0.22;
     mid.push({
-      x: cx + Math.cos(angle) * width * 0.3 * jitter,
-      y: cy + Math.sin(angle) * height * 0.36 * jitter,
+      x: cx + Math.cos(angle) * width * 0.42 * jitter,
+      y: cy + Math.sin(angle) * height * 0.48 * jitter,
       r: ((1.6 + rand() * 1.2) * SCALE) / 2,
       alpha: 0.4 + rand() * 0.45,
     });

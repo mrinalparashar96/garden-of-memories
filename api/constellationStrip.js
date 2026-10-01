@@ -1,15 +1,29 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import opentype from "opentype.js";
 import sharp from "sharp";
-import { STRIP_H, STRIP_W, constellationLayout } from "./constellation.js";
+import { MAX_PASS_NAME } from "../src/pass/passArt.js";
+import { ART_CX, ART_CY, STRIP_H, STRIP_W, constellationLayout } from "./constellation.js";
+
+const FONT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/fonts/SpaceMono-Regular.ttf");
+const font = opentype.parse(readFileSync(FONT_PATH));
+
+const LABEL = "MEMORY PASS";
+const LABEL_PX = 27;
 
 /**
- * @param {{ id: string, art: string }} pass
+ * @param {{ id: string, art: string, name?: string }} pass
  * @returns {Promise<Buffer>}
  */
 export async function renderConstellationStrip(pass) {
   const layout = constellationLayout(pass.id, STRIP_W, STRIP_H);
   const art = await maskedArtwork(pass.art);
+  const name = String(pass.name || "")
+    .trim()
+    .slice(0, MAX_PASS_NAME)
+    .toUpperCase();
   return sharp({
     create: {
       width: STRIP_W,
@@ -23,17 +37,24 @@ export async function renderConstellationStrip(pass) {
       { input: art.buffer, left: art.left, top: art.top, blend: "over" },
       { input: Buffer.from(orbitSvg(layout)), blend: "over" },
       { input: Buffer.from(particleSvg(layout)), blend: "over" },
+      { input: Buffer.from(captionSvg(name)), blend: "over" },
     ])
     .png()
     .toBuffer();
 }
 
+/** Font size that fits an 18-character name inside 60% of the strip width. */
+export function nameFontSize(width = STRIP_W) {
+  const advance = font.charToGlyph("M").advanceWidth / font.unitsPerEm;
+  return Math.floor((width * 0.6) / (advance * MAX_PASS_NAME));
+}
+
 async function maskedArtwork(art) {
   const file = path.join(process.cwd(), "public/assets/pass", `${art}.jpg`);
-  const artW = Math.round(STRIP_W * 0.62);
-  const artH = Math.round(STRIP_H * 0.52);
-  const left = Math.round((STRIP_W - artW) / 2);
-  const top = Math.round(STRIP_H * 0.42 - artH / 2);
+  const artW = Math.round(STRIP_W * 0.8);
+  const artH = Math.round(STRIP_H * 0.9);
+  const left = Math.round(STRIP_W * ART_CX - artW / 2);
+  const top = Math.round(STRIP_H * ART_CY - artH / 2);
   const photo = await sharp(await readFile(file))
     .resize(artW, artH, { fit: "cover", position: "centre" })
     .ensureAlpha()
@@ -41,9 +62,9 @@ async function maskedArtwork(art) {
     .toBuffer();
   const mask = Buffer.from(`<svg width="${artW}" height="${artH}" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <radialGradient id="m" cx="50%" cy="48%" r="62%">
-        <stop offset="0" stop-color="#fff" stop-opacity="0.9"/>
-        <stop offset="0.55" stop-color="#fff" stop-opacity="0.5"/>
+      <radialGradient id="m" cx="50%" cy="50%" r="50%">
+        <stop offset="0" stop-color="#fff" stop-opacity="0.95"/>
+        <stop offset="0.55" stop-color="#fff" stop-opacity="0.62"/>
         <stop offset="1" stop-color="#fff" stop-opacity="0"/>
       </radialGradient>
     </defs>
@@ -58,7 +79,7 @@ async function maskedArtwork(art) {
 
 function glowSvg() {
   return wrap(`<defs>
-    <radialGradient id="warm" cx="50%" cy="42%" r="46%">
+    <radialGradient id="warm" cx="58%" cy="46%" r="46%">
       <stop offset="0" stop-color="#ffd89a" stop-opacity="0.10"/>
       <stop offset="1" stop-color="#ffd89a" stop-opacity="0"/>
     </radialGradient>
@@ -118,18 +139,44 @@ function particleSvg(layout) {
       <stop offset="0.84" stop-color="#c4a882" stop-opacity="0.6"/>
       <stop offset="1" stop-color="#c4a882" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="shade" x1="0" y1="1" x2="0.62" y2="0.28">
-      <stop offset="0" stop-color="#000" stop-opacity="0.8"/>
-      <stop offset="0.5" stop-color="#000" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#000" stop-opacity="0"/>
-    </linearGradient>
   </defs>
   ${dots}
   ${trail}
   ${orbs}
   <rect x="0" y="${n(STRIP_H * 0.07)}" width="${STRIP_W}" height="2" fill="url(#line)"/>
-  <rect x="0" y="${n(STRIP_H * 0.72)}" width="${STRIP_W}" height="2" fill="url(#line)"/>
-  <rect width="100%" height="100%" fill="url(#shade)"/>`);
+  <rect x="0" y="${n(STRIP_H * 0.72)}" width="${STRIP_W}" height="2" fill="url(#line)"/>`);
+}
+
+function captionSvg(name) {
+  const size = nameFontSize();
+  const padX = 48;
+  const nameY = STRIP_H - 40;
+  const labelY = nameY - size - 18;
+  const label = glyphRun(LABEL, padX, labelY, LABEL_PX, 0.22);
+  const title = glyphRun(name, padX, nameY, size, 0);
+  return wrap(`<defs>
+    <radialGradient id="corner" cx="0" cy="1" r="0.72">
+      <stop offset="0" stop-color="#000" stop-opacity="0.82"/>
+      <stop offset="0.42" stop-color="#000" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#corner)"/>
+  <path d="${label}" fill="#c4a882"/>
+  <path d="${title}" fill="#f4efe6"/>`);
+}
+
+function glyphRun(text, x, y, size, trackingEm) {
+  const tracking = trackingEm * size;
+  let cursor = x;
+  const parts = [];
+  for (const ch of text) {
+    const glyph = font.charToGlyph(ch);
+    const data = glyph.getPath(cursor, y, size).toPathData(2);
+    if (data) parts.push(data);
+    cursor += (glyph.advanceWidth / font.unitsPerEm) * size + tracking;
+  }
+  return parts.join(" ");
 }
 
 function wrap(inner) {
