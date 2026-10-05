@@ -1,0 +1,984 @@
+From 0f9f372eb579f6c702107fa40d47e4eff8ecb11c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 11:44:39 +0000
+Subject: [PATCH 1/2] Add voice input to the Add memory composer
+
+- Wire the existing voiceCapture module into step 1
+- Live transcript fills the text box; recording capped at 60s
+- Play back or remove the take; shown again on the review step
+- Voice-only memories allowed (text minimum applies without audio)
+- Cancel the microphone on close; hide the button if unsupported
+- Tests for the voice flow
+---
+ src/leave/leave.css          |  58 +++++++++
+ src/screens/AddMemory.js     | 224 ++++++++++++++++++++++++++++++++---
+ tests/addMemoryVoice.test.js | 118 ++++++++++++++++++
+ 3 files changed, 381 insertions(+), 19 deletions(-)
+ create mode 100644 tests/addMemoryVoice.test.js
+
+diff --git a/src/leave/leave.css b/src/leave/leave.css
+index a8d0753..780e2ad 100644
+--- a/src/leave/leave.css
++++ b/src/leave/leave.css
+@@ -317,3 +317,61 @@
+   align-items: center;
+   text-align: center;
+ }
++
++/* Voice input on the Add memory composer */
++.add-memory-voice {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 0.6rem;
++  margin: 0 0 0.75rem;
++}
++
++.add-memory-voice .pill--ghost[data-record].is-recording {
++  animation: add-memory-listening 1.6s ease-in-out infinite;
++}
++
++@keyframes add-memory-listening {
++  0%,
++  100% {
++    box-shadow: 0 0 0 0 rgba(196, 168, 130, 0.35);
++  }
++  50% {
++    box-shadow: 0 0 0 0.45rem rgba(196, 168, 130, 0);
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .add-memory-voice .pill--ghost[data-record].is-recording {
++    animation: none;
++  }
++}
++
++.add-memory-voice-take {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 0.35rem;
++  width: 100%;
++}
++
++.add-memory-voice-remove {
++  padding: 0.25rem 0.5rem;
++  border: 0;
++  background: none;
++  color: var(--paper-muted);
++  font: inherit;
++  font-size: 0.75rem;
++  text-decoration: underline;
++  text-underline-offset: 0.2em;
++  cursor: pointer;
++}
++
++.add-memory-voice-remove:hover,
++.add-memory-voice-remove:focus-visible {
++  color: var(--paper);
++}
++
++.add-memory-review-audio {
++  margin: 0 0 1rem;
++}
+diff --git a/src/screens/AddMemory.js b/src/screens/AddMemory.js
+index f8d174b..545399a 100644
+--- a/src/screens/AddMemory.js
++++ b/src/screens/AddMemory.js
+@@ -10,11 +10,28 @@ import {
+ } from "../memories.js";
+ import { addMemory as persistMemory } from "../memoryStore.js";
+ import { getPass } from "../pass/passStore.js";
++import { createVoiceCapture } from "../voiceCapture.js";
+ 
+ const HOLD_MS = 1200;
+ const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
+ const REGION_IDS = Object.keys(REGION_LABELS);
+ const RELATIONSHIP_IDS = Object.keys(RELATIONSHIP_LABELS);
++/** Keep recordings small enough for localStorage (~0.5 MB at 60s). */
++const MAX_RECORD_MS = 60000;
++const VOICE_FALLBACK_BODY = "A voice memory.";
++
++function voiceSupported() {
++  return (
++    typeof window !== "undefined" &&
++    typeof window.MediaRecorder !== "undefined" &&
++    Boolean(navigator.mediaDevices?.getUserMedia)
++  );
++}
++
++function formatClock(ms) {
++  const total = Math.max(0, Math.floor(ms / 1000));
++  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
++}
+ 
+ /**
+  * Four-step Add your memory composer + hold + arrival handoff.
+@@ -40,8 +57,12 @@ export function createAddMemory({
+   let holding = false;
+   let holdRaf = 0;
+   let holdStart = 0;
+-  /** @type {{ title: string, body: string, emotion: string, relationship: string, region: string }} */
++  /** @type {{ title: string, body: string, emotion: string, relationship: string, region: string, audioDataUrl: string }} */
+   let draft = emptyDraft();
++  /** @type {ReturnType<typeof createVoiceCapture> | null} */
++  let voice = null;
++  let recordTimer = 0;
++  let recordStart = 0;
+ 
+   function emptyDraft() {
+     return {
+@@ -50,9 +71,30 @@ export function createAddMemory({
+       emotion: "",
+       relationship: "",
+       region: "",
++      audioDataUrl: "",
+     };
+   }
+ 
++  function isRecording() {
++    return Boolean(voice?.isRecording());
++  }
++
++  function hasText() {
++    return draft.body.trim().length >= MIN_BODY_CHARS;
++  }
++
++  function hasAudio() {
++    return Boolean(draft.audioDataUrl);
++  }
++
++  /** Stop and discard any in-progress recording (close / cancel). */
++  function cancelRecording() {
++    window.clearInterval(recordTimer);
++    recordTimer = 0;
++    voice?.cancel();
++    voice = null;
++  }
++
+   function open() {
+     if (active || casting) return;
+     active = true;
+@@ -103,6 +145,7 @@ export function createAddMemory({
+   }
+ 
+   function renderWrite() {
++    const canVoice = voiceSupported();
+     root.innerHTML = `
+       <section class="leave-screen leave-screen--compose add-memory-screen">
+         ${chrome(1)}
+@@ -116,12 +159,25 @@ export function createAddMemory({
+           </label>
+           <div class="leave-type-wrap">
+             <textarea data-body rows="5" maxlength="${MAX_BODY_CHARS}"
+-              placeholder="A few ordinary words are enough.">${escapeHtml(
+-                draft.body
+-              )}</textarea>
++              placeholder="${
++                canVoice
++                  ? "Write a few ordinary words, or speak them."
++                  : "A few ordinary words are enough."
++              }">${escapeHtml(draft.body)}</textarea>
+             <p class="leave-type-count" data-count>0/${MAX_BODY_CHARS}</p>
+           </div>
+-          <p class="leave-status" data-status></p>
++          ${
++            canVoice
++              ? `<div class="add-memory-voice" data-voice>
++              <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
++              <div class="add-memory-voice-take" data-take hidden>
++                <audio class="memory-audio" data-take-audio controls></audio>
++                <button type="button" class="add-memory-voice-remove" data-take-remove>Remove recording</button>
++              </div>
++            </div>`
++              : ""
++          }
++          <p class="leave-status" data-status aria-live="polite"></p>
+           <button type="button" class="pill pill--primary" data-next disabled>Next</button>
+         </div>
+       </section>
+@@ -132,27 +188,140 @@ export function createAddMemory({
+     const count = root.querySelector("[data-count]");
+     const next = root.querySelector("[data-next]");
+     const status = root.querySelector("[data-status]");
++    const recordBtn = root.querySelector("[data-record]");
++    const take = root.querySelector("[data-take]");
++    const takeAudio = root.querySelector("[data-take-audio]");
++    const takeRemove = root.querySelector("[data-take-remove]");
++
++    let statusNote = "";
++    const setNote = (text) => {
++      statusNote = text;
++      sync();
++    };
+ 
+     const sync = () => {
+       draft.body = (body?.value || "").slice(0, MAX_BODY_CHARS);
+       draft.title = (title?.value || "").slice(0, 48);
+       if (count) count.textContent = `${draft.body.length}/${MAX_BODY_CHARS}`;
+       const len = draft.body.trim().length;
+-      const ok = len >= MIN_BODY_CHARS && len <= MAX_BODY_CHARS;
++      const ok = !isRecording() && (hasText() || hasAudio());
+       if (next) next.disabled = !ok;
++      if (!status) return;
++      if (isRecording()) return; // timer owns the status while recording
++      if (statusNote) status.textContent = statusNote;
++      else if (!hasAudio() && len > 0 && len < MIN_BODY_CHARS) {
++        status.textContent = `${MIN_BODY_CHARS - len} more characters…`;
++      } else status.textContent = "";
++    };
++
++    const showTake = () => {
++      if (!take || !takeAudio) return;
++      if (hasAudio()) {
++        takeAudio.src = draft.audioDataUrl;
++        take.hidden = false;
++      } else {
++        takeAudio.pause?.();
++        takeAudio.removeAttribute("src");
++        take.hidden = true;
++      }
++      if (recordBtn) {
++        recordBtn.textContent = hasAudio() ? "Record again" : "Speak it instead";
++      }
++    };
++
++    const setRecordingUi = (on) => {
++      if (!recordBtn) return;
++      recordBtn.classList.toggle("is-recording", on);
++      recordBtn.setAttribute("aria-pressed", on ? "true" : "false");
++      if (on) recordBtn.textContent = "Stop";
++      if (body) body.readOnly = on;
++      if (take && on) take.hidden = true;
++    };
++
++    const tickClock = () => {
++      const elapsed = performance.now() - recordStart;
+       if (status) {
+-        status.textContent =
+-          len > 0 && len < MIN_BODY_CHARS
+-            ? `${MIN_BODY_CHARS - len} more characters…`
+-            : "";
++        status.textContent = `Listening… ${formatClock(elapsed)} / ${formatClock(
++          MAX_RECORD_MS
++        )}`;
++      }
++      if (elapsed >= MAX_RECORD_MS) void stopRecording();
++    };
++
++    const startRecording = async () => {
++      // Text typed before speaking stays; the transcript is appended after it.
++      const prefix = draft.body.trim();
++      voice = createVoiceCapture({
++        onTranscript(text) {
++          if (!body) return;
++          body.value = (prefix ? `${prefix} ${text}` : text).slice(0, MAX_BODY_CHARS);
++          sync();
++        },
++      });
++      try {
++        await voice.start();
++      } catch (err) {
++        voice = null;
++        const denied =
++          err?.name === "NotAllowedError" || err?.name === "SecurityError";
++        setNote(
++          denied
++            ? "Microphone access was blocked. Allow it in your browser to record."
++            : "Couldn't start the microphone on this device."
++        );
++        return;
++      }
++      statusNote = "";
++      recordStart = performance.now();
++      setRecordingUi(true);
++      tickClock();
++      recordTimer = window.setInterval(tickClock, 250);
++      sync();
++    };
++
++    const stopRecording = async () => {
++      if (!voice) return;
++      window.clearInterval(recordTimer);
++      recordTimer = 0;
++      const current = voice;
++      voice = null;
++      const result = await current.stop();
++      setRecordingUi(false);
++      if (!result.dataUrl || result.durationMs < 800) {
++        setNote("That was too short to keep. Try again.");
++        showTake();
++        return;
+       }
++      draft.audioDataUrl = result.dataUrl;
++      showTake();
++      setNote(
++        result.transcript
++          ? "Recorded. Edit the words above if anything came out wrong."
++          : "Recorded. Add a few words above if you like."
++      );
+     };
+-    body?.addEventListener("input", sync);
++
++    recordBtn?.addEventListener("click", () => {
++      if (isRecording()) void stopRecording();
++      else void startRecording();
++    });
++
++    takeRemove?.addEventListener("click", () => {
++      draft.audioDataUrl = "";
++      showTake();
++      setNote("");
++    });
++
++    body?.addEventListener("input", () => {
++      statusNote = "";
++      sync();
++    });
+     title?.addEventListener("input", sync);
++    showTake();
+     sync();
+     requestAnimationFrame(() => body?.focus());
+     next?.addEventListener("click", () => {
+-      if (next.disabled) return;
++      if (next.disabled || isRecording()) return;
+       showStep(2);
+     });
+   }
+@@ -266,17 +435,26 @@ export function createAddMemory({
+   }
+ 
+   function renderLeave() {
+-    const preview =
+-      draft.body.trim().length > 160
+-        ? `${draft.body.trim().slice(0, 157)}…`
+-        : draft.body.trim();
++    const text = draft.body.trim();
++    const preview = text.length > 160 ? `${text.slice(0, 157)}…` : text;
+     root.innerHTML = `
+       <section class="leave-screen leave-screen--compose add-memory-screen add-memory-screen--leave">
+         ${chrome(4)}
+         <div class="leave-screen-inner">
+           <p class="leave-kicker">Ready</p>
+           <h1 class="leave-hero">Leave it here.</h1>
+-          <blockquote class="add-memory-review">${escapeHtml(preview)}</blockquote>
++          ${
++            preview
++              ? `<blockquote class="add-memory-review">${escapeHtml(preview)}</blockquote>`
++              : ""
++          }
++          ${
++            hasAudio()
++              ? `<audio class="memory-audio add-memory-review-audio" controls src="${escapeAttr(
++                  draft.audioDataUrl
++                )}"></audio>`
++              : ""
++          }
+           <p class="add-memory-review-meta">
+             ${escapeHtml(draft.emotion)} · ${escapeHtml(
+               RELATIONSHIP_LABELS[draft.relationship] || ""
+@@ -360,7 +538,8 @@ export function createAddMemory({
+     if (holdBtn) holdBtn.disabled = true;
+     if (status) status.textContent = "Leaving…";
+ 
+-    const body = draft.body.trim().slice(0, MAX_BODY_CHARS);
++    const typed = draft.body.trim().slice(0, MAX_BODY_CHARS);
++    const body = typed || VOICE_FALLBACK_BODY;
+     const title = (draft.title.trim() || autoTitleFromBody(body)).slice(0, 48);
+     const pass = getPass();
+     const landing = garden?.resolveLandingPosition?.(draft.region) || null;
+@@ -380,8 +559,14 @@ export function createAddMemory({
+       landingPulseMs: 10000,
+     };
+     if (landing) memory.position = landing;
++    if (hasAudio()) memory.audioDataUrl = draft.audioDataUrl;
+ 
+-    const { ok, memory: saved } = persistMemory(memory);
++    const { ok, audioDropped, memory: saved } = persistMemory(memory);
++    if (audioDropped) {
++      console.warn(
++        "Storage is full: the memory was saved without its recording."
++      );
++    }
+     if (!ok) {
+       casting = false;
+       if (holdBtn) holdBtn.disabled = false;
+@@ -436,6 +621,7 @@ export function createAddMemory({
+ 
+   function close({ cancel = true, castId = null } = {}) {
+     if (!active && !casting) return;
++    cancelRecording();
+     window.cancelAnimationFrame(holdRaf);
+     holding = false;
+     active = false;
+diff --git a/tests/addMemoryVoice.test.js b/tests/addMemoryVoice.test.js
+new file mode 100644
+index 0000000..ff79270
+--- /dev/null
++++ b/tests/addMemoryVoice.test.js
+@@ -0,0 +1,118 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++const fakeVoice = {
++  recording: false,
++  onTranscript: null,
++  start: vi.fn(async () => {
++    fakeVoice.recording = true;
++  }),
++  stop: vi.fn(async () => {
++    fakeVoice.recording = false;
++    return {
++      blob: {},
++      dataUrl: "data:audio/webm;base64,AAAA",
++      transcript: "the harbour at dusk",
++      durationMs: 4000,
++    };
++  }),
++  cancel: vi.fn(() => {
++    fakeVoice.recording = false;
++  }),
++  isRecording: () => fakeVoice.recording,
++};
++
++vi.mock("../src/voiceCapture.js", () => ({
++  createVoiceCapture: ({ onTranscript } = {}) => {
++    fakeVoice.onTranscript = onTranscript;
++    return fakeVoice;
++  },
++}));
++
++const persisted = [];
++vi.mock("../src/memoryStore.js", () => ({
++  addMemory: (m) => {
++    persisted.push(m);
++    return { ok: true, audioDropped: false, memory: m, memories: persisted };
++  },
++}));
++
++const { createAddMemory } = await import("../src/screens/AddMemory.js");
++
++const flush = () => new Promise((r) => setTimeout(r, 0));
++
++describe("Add memory voice input", () => {
++  let mount;
++  let composer;
++
++  beforeEach(() => {
++    persisted.length = 0;
++    fakeVoice.recording = false;
++    window.MediaRecorder = function MediaRecorder() {};
++    Object.defineProperty(navigator, "mediaDevices", {
++      configurable: true,
++      value: { getUserMedia: vi.fn() },
++    });
++    mount = document.createElement("div");
++    document.body.appendChild(mount);
++    composer = createAddMemory({ mount, garden: null });
++    composer.open();
++  });
++
++  afterEach(() => {
++    composer.destroy();
++    mount.remove();
++    delete window.MediaRecorder;
++  });
++
++  const q = (sel) => mount.querySelector(sel);
++
++  it("shows a record button when the browser supports recording", () => {
++    expect(q("[data-record]")).not.toBeNull();
++    expect(q("[data-next]").disabled).toBe(true);
++  });
++
++  it("fills the text box with the live transcript and keeps the recording", async () => {
++    q("[data-record]").click();
++    await flush();
++    expect(q("[data-record]").classList.contains("is-recording")).toBe(true);
++    expect(q("[data-next]").disabled).toBe(true);
++
++    fakeVoice.onTranscript("the harbour at dusk");
++    expect(q("[data-body]").value).toBe("the harbour at dusk");
++
++    q("[data-record]").click();
++    await flush();
++    expect(q("[data-take]").hidden).toBe(false);
++    expect(q("[data-record]").textContent).toBe("Record again");
++    // Audio alone is enough, even under the text minimum
++    expect(q("[data-next]").disabled).toBe(false);
++  });
++
++  it("removing the recording re-applies the text minimum", async () => {
++    q("[data-record]").click();
++    await flush();
++    q("[data-record]").click();
++    await flush();
++    q("[data-body]").value = "";
++    q("[data-body]").dispatchEvent(new Event("input"));
++    expect(q("[data-next]").disabled).toBe(false);
++    q("[data-take-remove]").click();
++    expect(q("[data-take]").hidden).toBe(true);
++    expect(q("[data-next]").disabled).toBe(true);
++  });
++
++  it("closing mid-recording cancels the microphone", async () => {
++    q("[data-record]").click();
++    await flush();
++    composer.close();
++    expect(fakeVoice.cancel).toHaveBeenCalled();
++  });
++
++  it("hides voice input when recording isn't supported", () => {
++    composer.destroy();
++    delete window.MediaRecorder;
++    composer = createAddMemory({ mount, garden: null });
++    composer.open();
++    expect(q("[data-record]")).toBeNull();
++  });
++});
+-- 
+2.43.0
+
+
+From 6843e88e5cd4244754d03e1cebb832f0ae6e27ee Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 11:47:46 +0000
+Subject: [PATCH 2/2] Multilingual voice input
+
+- Language picker beside the record button (20 languages, labelled natively)
+- Defaults to the browser language, remembers the choice
+- Speech recognition runs in the chosen language
+- Memories store their language; the card sets lang for correct rendering
+- Tests for matching, persistence and the composer
+---
+ src/garden.js                |  1 +
+ src/leave/leave.css          | 24 +++++++++++
+ src/main.js                  |  8 ++++
+ src/memoryStore.js           |  3 ++
+ src/screens/AddMemory.js     | 35 +++++++++++++++-
+ src/voiceCapture.js          |  4 +-
+ src/voiceLanguages.js        | 79 ++++++++++++++++++++++++++++++++++++
+ tests/addMemoryVoice.test.js | 28 ++++++++++++-
+ tests/memoryStore.test.js    | 16 ++++++++
+ tests/voiceLanguages.test.js | 36 ++++++++++++++++
+ 10 files changed, 230 insertions(+), 4 deletions(-)
+ create mode 100644 src/voiceLanguages.js
+ create mode 100644 tests/voiceLanguages.test.js
+
+diff --git a/src/garden.js b/src/garden.js
+index aa909f9..ededf9b 100644
+--- a/src/garden.js
++++ b/src/garden.js
+@@ -1236,6 +1236,7 @@ export async function createGarden(canvas, ui, options = {}) {
+       relationship: RELATIONSHIP_LABELS[memory.relationship],
+       body: memory.body,
+       audioDataUrl: memory.audioDataUrl || null,
++      lang: memory.lang || "",
+       title: memory.title,
+       emotion: memory.emotion || null,
+       place: memory.place || "Opera House",
+diff --git a/src/leave/leave.css b/src/leave/leave.css
+index 780e2ad..7c6c512 100644
+--- a/src/leave/leave.css
++++ b/src/leave/leave.css
+@@ -375,3 +375,27 @@
+ .add-memory-review-audio {
+   margin: 0 0 1rem;
+ }
++
++.add-memory-voice-row {
++  display: flex;
++  flex-wrap: wrap;
++  justify-content: center;
++  align-items: center;
++  gap: 0.5rem;
++}
++
++.add-memory-voice-row .pill--ghost[data-record] {
++  margin: 0;
++}
++
++.add-memory-lang-select {
++  text-transform: none;
++  letter-spacing: 0.02em;
++  font-size: 0.72rem;
++  max-width: 11rem;
++}
++
++.add-memory-lang-select:disabled {
++  opacity: 0.5;
++  cursor: default;
++}
+diff --git a/src/main.js b/src/main.js
+index f537f3f..818b7f2 100644
+--- a/src/main.js
++++ b/src/main.js
+@@ -533,6 +533,7 @@ const ui = {
+     relationship,
+     body,
+     audioDataUrl,
++    lang = "",
+     title,
+     emotion,
+     place = "Opera House",
+@@ -574,6 +575,13 @@ const ui = {
+       }
+     }
+     memoryBody.textContent = body;
++    // Tell the browser the language so fonts, hyphenation and screen readers behave.
++    if (lang) memoryBody.setAttribute("lang", lang);
++    else memoryBody.removeAttribute("lang");
++    if (memoryTitle) {
++      if (lang) memoryTitle.setAttribute("lang", lang);
++      else memoryTitle.removeAttribute("lang");
++    }
+     syncSaveButton();
+     if (memoryAudio) {
+       if (audioDataUrl) {
+diff --git a/src/memoryStore.js b/src/memoryStore.js
+index 9f051a3..2e64f6c 100644
+--- a/src/memoryStore.js
++++ b/src/memoryStore.js
+@@ -146,6 +146,9 @@ function normalizeMemory(m) {
+     out.audioDataUrl = m.audioDataUrl;
+   }
+   if (m.place) out.place = String(m.place);
++  if (typeof m.lang === "string" && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(m.lang)) {
++    out.lang = m.lang;
++  }
+   if (
+     Array.isArray(m.position) &&
+     m.position.length >= 3 &&
+diff --git a/src/screens/AddMemory.js b/src/screens/AddMemory.js
+index 545399a..3ddb174 100644
+--- a/src/screens/AddMemory.js
++++ b/src/screens/AddMemory.js
+@@ -11,6 +11,11 @@ import {
+ import { addMemory as persistMemory } from "../memoryStore.js";
+ import { getPass } from "../pass/passStore.js";
+ import { createVoiceCapture } from "../voiceCapture.js";
++import {
++  getPreferredVoiceLanguage,
++  setPreferredVoiceLanguage,
++  VOICE_LANGUAGES,
++} from "../voiceLanguages.js";
+ 
+ const HOLD_MS = 1200;
+ const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
+@@ -72,6 +77,7 @@ export function createAddMemory({
+       relationship: "",
+       region: "",
+       audioDataUrl: "",
++      lang: "",
+     };
+   }
+ 
+@@ -101,6 +107,7 @@ export function createAddMemory({
+     casting = false;
+     draft = emptyDraft();
+     draft.region = garden?.suggestRegion?.() || "forecourt";
++    draft.lang = getPreferredVoiceLanguage();
+     root.hidden = false;
+     requestAnimationFrame(() => root.classList.add("is-active"));
+     onEnter?.();
+@@ -169,7 +176,19 @@ export function createAddMemory({
+           ${
+             canVoice
+               ? `<div class="add-memory-voice" data-voice>
+-              <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
++              <div class="add-memory-voice-row">
++                <button type="button" class="pill pill--ghost" data-record aria-pressed="false">Speak it instead</button>
++                <label class="add-memory-voice-lang">
++                  <span class="visually-hidden">Language you'll speak</span>
++                  <select class="emotion-select add-memory-lang-select" data-lang>
++                    ${VOICE_LANGUAGES.map(
++                      (l) => `<option value="${l.code}" lang="${l.code}"${
++                        l.code === draft.lang ? " selected" : ""
++                      }>${l.label}</option>`
++                    ).join("")}
++                  </select>
++                </label>
++              </div>
+               <div class="add-memory-voice-take" data-take hidden>
+                 <audio class="memory-audio" data-take-audio controls></audio>
+                 <button type="button" class="add-memory-voice-remove" data-take-remove>Remove recording</button>
+@@ -192,6 +211,7 @@ export function createAddMemory({
+     const take = root.querySelector("[data-take]");
+     const takeAudio = root.querySelector("[data-take-audio]");
+     const takeRemove = root.querySelector("[data-take-remove]");
++    const langSelect = root.querySelector("[data-lang]");
+ 
+     let statusNote = "";
+     const setNote = (text) => {
+@@ -235,6 +255,7 @@ export function createAddMemory({
+       recordBtn.setAttribute("aria-pressed", on ? "true" : "false");
+       if (on) recordBtn.textContent = "Stop";
+       if (body) body.readOnly = on;
++      if (langSelect) langSelect.disabled = on;
+       if (take && on) take.hidden = true;
+     };
+ 
+@@ -252,6 +273,7 @@ export function createAddMemory({
+       // Text typed before speaking stays; the transcript is appended after it.
+       const prefix = draft.body.trim();
+       voice = createVoiceCapture({
++        lang: draft.lang,
+         onTranscript(text) {
+           if (!body) return;
+           body.value = (prefix ? `${prefix} ${text}` : text).slice(0, MAX_BODY_CHARS);
+@@ -306,6 +328,16 @@ export function createAddMemory({
+       else void startRecording();
+     });
+ 
++    const applyLang = () => {
++      if (body && draft.lang) body.setAttribute("lang", draft.lang);
++    };
++    applyLang();
++    langSelect?.addEventListener("change", () => {
++      draft.lang = langSelect.value;
++      setPreferredVoiceLanguage(draft.lang);
++      applyLang();
++    });
++
+     takeRemove?.addEventListener("click", () => {
+       draft.audioDataUrl = "";
+       showTake();
+@@ -560,6 +592,7 @@ export function createAddMemory({
+     };
+     if (landing) memory.position = landing;
+     if (hasAudio()) memory.audioDataUrl = draft.audioDataUrl;
++    if (draft.lang) memory.lang = draft.lang;
+ 
+     const { ok, audioDropped, memory: saved } = persistMemory(memory);
+     if (audioDropped) {
+diff --git a/src/voiceCapture.js b/src/voiceCapture.js
+index 7cc4901..4d12ac9 100644
+--- a/src/voiceCapture.js
++++ b/src/voiceCapture.js
+@@ -3,7 +3,7 @@
+  * Audio is the memory; transcript is optional and unpolished.
+  */
+ 
+-export function createVoiceCapture({ onTranscript } = {}) {
++export function createVoiceCapture({ onTranscript, lang = "en-AU" } = {}) {
+   let mediaRecorder = null;
+   let chunks = [];
+   let stream = null;
+@@ -40,7 +40,7 @@ export function createVoiceCapture({ onTranscript } = {}) {
+       recognition = new SpeechRecognition();
+       recognition.continuous = true;
+       recognition.interimResults = true;
+-      recognition.lang = "en-AU";
++      recognition.lang = lang;
+       recognition.onresult = (event) => {
+         let text = "";
+         for (let i = 0; i < event.results.length; i++) {
+diff --git a/src/voiceLanguages.js b/src/voiceLanguages.js
+new file mode 100644
+index 0000000..2dab4b5
+--- /dev/null
++++ b/src/voiceLanguages.js
+@@ -0,0 +1,79 @@
++/**
++ * Languages offered for spoken memories.
++ * Codes are BCP-47 tags the Web Speech API understands. Labels are written
++ * in the language itself so a speaker can find their own without reading English.
++ * Ordered by how commonly each is spoken at home in Sydney, English first.
++ */
++import { readJson, writeJson } from "./core/storage.js";
++
++const STORAGE_KEY = "stillhere.voice.lang";
++
++export const VOICE_LANGUAGES = [
++  { code: "en-AU", label: "English" },
++  { code: "zh-CN", label: "中文（普通话）" },
++  { code: "ar-SA", label: "العربية" },
++  { code: "zh-HK", label: "中文（廣東話）" },
++  { code: "vi-VN", label: "Tiếng Việt" },
++  { code: "el-GR", label: "Ελληνικά" },
++  { code: "hi-IN", label: "हिन्दी" },
++  { code: "it-IT", label: "Italiano" },
++  { code: "ne-NP", label: "नेपाली" },
++  { code: "ko-KR", label: "한국어" },
++  { code: "es-ES", label: "Español" },
++  { code: "pa-IN", label: "ਪੰਜਾਬੀ" },
++  { code: "id-ID", label: "Bahasa Indonesia" },
++  { code: "fil-PH", label: "Filipino" },
++  { code: "ja-JP", label: "日本語" },
++  { code: "fr-FR", label: "Français" },
++  { code: "de-DE", label: "Deutsch" },
++  { code: "pt-BR", label: "Português" },
++  { code: "th-TH", label: "ไทย" },
++  { code: "tr-TR", label: "Türkçe" },
++];
++
++const CODES = new Set(VOICE_LANGUAGES.map((l) => l.code));
++
++export function isVoiceLanguage(code) {
++  return typeof code === "string" && CODES.has(code);
++}
++
++export function voiceLanguageLabel(code) {
++  return VOICE_LANGUAGES.find((l) => l.code === code)?.label || "";
++}
++
++/**
++ * Best match for a browser language tag, e.g. "zh" → zh-CN, "en-GB" → en-AU.
++ * @param {string} tag
++ * @returns {string} a code from VOICE_LANGUAGES
++ */
++export function matchVoiceLanguage(tag) {
++  if (typeof tag !== "string" || !tag) return "en-AU";
++  const lower = tag.toLowerCase();
++  const exact = VOICE_LANGUAGES.find((l) => l.code.toLowerCase() === lower);
++  if (exact) return exact.code;
++  const primary = lower.split("-")[0];
++  if (primary === "zh") {
++    // Traditional-script regions speak Cantonese more often than Mandarin.
++    return /-(hk|mo|tw|hant)/.test(lower) ? "zh-HK" : "zh-CN";
++  }
++  const byPrimary = VOICE_LANGUAGES.find(
++    (l) => l.code.toLowerCase().split("-")[0] === primary
++  );
++  return byPrimary?.code || "en-AU";
++}
++
++/** Remembered choice, else the browser's language. */
++export function getPreferredVoiceLanguage() {
++  const saved = readJson(STORAGE_KEY, null);
++  if (isVoiceLanguage(saved)) return saved;
++  const nav =
++    typeof navigator !== "undefined"
++      ? navigator.languages?.[0] || navigator.language
++      : "";
++  return matchVoiceLanguage(nav);
++}
++
++export function setPreferredVoiceLanguage(code) {
++  if (!isVoiceLanguage(code)) return false;
++  return writeJson(STORAGE_KEY, code).ok;
++}
+diff --git a/tests/addMemoryVoice.test.js b/tests/addMemoryVoice.test.js
+index ff79270..66d46cc 100644
+--- a/tests/addMemoryVoice.test.js
++++ b/tests/addMemoryVoice.test.js
+@@ -21,9 +21,11 @@ const fakeVoice = {
+   isRecording: () => fakeVoice.recording,
+ };
+ 
++let lastLang = "";
+ vi.mock("../src/voiceCapture.js", () => ({
+-  createVoiceCapture: ({ onTranscript } = {}) => {
++  createVoiceCapture: ({ onTranscript, lang } = {}) => {
+     fakeVoice.onTranscript = onTranscript;
++    lastLang = lang;
+     return fakeVoice;
+   },
+ }));
+@@ -45,6 +47,7 @@ describe("Add memory voice input", () => {
+   let composer;
+ 
+   beforeEach(() => {
++    localStorage.clear();
+     persisted.length = 0;
+     fakeVoice.recording = false;
+     window.MediaRecorder = function MediaRecorder() {};
+@@ -108,6 +111,29 @@ describe("Add memory voice input", () => {
+     expect(fakeVoice.cancel).toHaveBeenCalled();
+   });
+ 
++  it("records in the chosen language and remembers it", async () => {
++    const select = q("[data-lang]");
++    expect(select).not.toBeNull();
++    expect(select.value).toBe("en-AU");
++    select.value = "vi-VN";
++    select.dispatchEvent(new Event("change"));
++    expect(q("[data-body]").getAttribute("lang")).toBe("vi-VN");
++
++    q("[data-record]").click();
++    await flush();
++    expect(lastLang).toBe("vi-VN");
++    expect(select.disabled).toBe(true);
++    q("[data-record]").click();
++    await flush();
++    expect(select.disabled).toBe(false);
++
++    // A fresh composer opens with the remembered language
++    composer.destroy();
++    composer = createAddMemory({ mount, garden: null });
++    composer.open();
++    expect(q("[data-lang]").value).toBe("vi-VN");
++  });
++
+   it("hides voice input when recording isn't supported", () => {
+     composer.destroy();
+     delete window.MediaRecorder;
+diff --git a/tests/memoryStore.test.js b/tests/memoryStore.test.js
+index 553ece5..508bcec 100644
+--- a/tests/memoryStore.test.js
++++ b/tests/memoryStore.test.js
+@@ -178,3 +178,19 @@ describe("saveUserMemories", () => {
+     expect(getMemories()).toHaveLength(1);
+   });
+ });
++
++describe("memory language", () => {
++  beforeEach(() => localStorage.clear());
++
++  it("keeps a valid language tag and drops junk", () => {
++    const base = {
++      id: "l1",
++      body: "Một buổi chiều ở bến cảng.",
++      relationship: "often",
++      region: "harbour",
++    };
++    expect(addMemory({ ...base, lang: "vi-VN" }).memory.lang).toBe("vi-VN");
++    expect(addMemory({ ...base, id: "l2", lang: "<b>" }).memory.lang).toBeUndefined();
++    expect(getMemories().find((m) => m.id === "l1").lang).toBe("vi-VN");
++  });
++});
+diff --git a/tests/voiceLanguages.test.js b/tests/voiceLanguages.test.js
+new file mode 100644
+index 0000000..e048251
+--- /dev/null
++++ b/tests/voiceLanguages.test.js
+@@ -0,0 +1,36 @@
++import { beforeEach, describe, expect, it } from "vitest";
++import {
++  getPreferredVoiceLanguage,
++  isVoiceLanguage,
++  matchVoiceLanguage,
++  setPreferredVoiceLanguage,
++  VOICE_LANGUAGES,
++} from "../src/voiceLanguages.js";
++
++describe("voice languages", () => {
++  beforeEach(() => localStorage.clear());
++
++  it("has unique valid BCP-47 codes", () => {
++    const codes = VOICE_LANGUAGES.map((l) => l.code);
++    expect(new Set(codes).size).toBe(codes.length);
++    for (const c of codes) expect(c).toMatch(/^[a-z]{2,3}-[A-Z]{2}$/);
++  });
++
++  it("matches browser tags to an offered language", () => {
++    expect(matchVoiceLanguage("en-GB")).toBe("en-AU");
++    expect(matchVoiceLanguage("zh")).toBe("zh-CN");
++    expect(matchVoiceLanguage("zh-Hant-TW")).toBe("zh-HK");
++    expect(matchVoiceLanguage("vi")).toBe("vi-VN");
++    expect(matchVoiceLanguage("xx-YY")).toBe("en-AU");
++    expect(matchVoiceLanguage("")).toBe("en-AU");
++  });
++
++  it("remembers a valid choice and ignores an invalid one", () => {
++    expect(setPreferredVoiceLanguage("el-GR")).toBe(true);
++    expect(getPreferredVoiceLanguage()).toBe("el-GR");
++    expect(setPreferredVoiceLanguage("klingon")).toBe(false);
++    expect(getPreferredVoiceLanguage()).toBe("el-GR");
++    expect(isVoiceLanguage("ar-SA")).toBe(true);
++    expect(isVoiceLanguage("ar")).toBe(false);
++  });
++});
+-- 
+2.43.0
+
