@@ -178,3 +178,19 @@ describe("saveUserMemories", () => {
     expect(getMemories()).toHaveLength(1);
   });
 });
+
+describe("memory language", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("keeps a valid language tag and drops junk", () => {
+    const base = {
+      id: "l1",
+      body: "Một buổi chiều ở bến cảng.",
+      relationship: "often",
+      region: "harbour",
+    };
+    expect(addMemory({ ...base, lang: "vi-VN" }).memory.lang).toBe("vi-VN");
+    expect(addMemory({ ...base, id: "l2", lang: "<b>" }).memory.lang).toBeUndefined();
+    expect(getMemories().find((m) => m.id === "l1").lang).toBe("vi-VN");
+  });
+});

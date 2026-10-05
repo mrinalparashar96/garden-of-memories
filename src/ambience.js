@@ -3,6 +3,9 @@ import { readFlag, writeFlag } from "./core/storage.js";
 const STORAGE_KEY = "still-here-ambience-muted";
 const TRACK_URL = "/assets/audio/bittersweet-symphony.mp3";
 const MASTER_VOLUME = 0.16;
+/** Near-silence while the microphone is open. Mute preference stays as saved. */
+const DUCK_LEVEL = 0.012;
+const DUCK_FADE_S = 0.4;
 
 /**
  * Soft looping score — low, muffled, lightly reverbed.
@@ -14,6 +17,8 @@ export function createAmbience({ toggleEl } = {}) {
   let masterGain = null;
   let started = false;
   let muted = readFlag(STORAGE_KEY);
+  /** How many record/playback holders currently want the score quiet. */
+  let duckCount = 0;
 
   function syncToggle() {
     if (!toggleEl) return;
@@ -22,11 +27,37 @@ export function createAmbience({ toggleEl } = {}) {
     toggleEl.classList.toggle("is-muted", muted);
   }
 
-  function applyMute() {
+  function desiredGain() {
+    if (muted) return 0;
+    if (duckCount > 0) return DUCK_LEVEL;
+    return MASTER_VOLUME;
+  }
+
+  function fadeTo(target, seconds) {
     if (!masterGain || !ctx) return;
-    const target = muted ? 0 : MASTER_VOLUME;
-    masterGain.gain.cancelScheduledValues(ctx.currentTime);
-    masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.08);
+    const now = ctx.currentTime;
+    const param = masterGain.gain;
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(target, now + seconds);
+  }
+
+  function applyMute() {
+    fadeTo(desiredGain(), 0.25);
+  }
+
+  /**
+   * Fade the score toward silence without touching the saved mute flag.
+   * Calls stack: the score stays quiet until every duck() has an unduck().
+   */
+  function duck() {
+    duckCount += 1;
+    fadeTo(desiredGain(), DUCK_FADE_S);
+  }
+
+  function unduck() {
+    duckCount = Math.max(0, duckCount - 1);
+    fadeTo(desiredGain(), DUCK_FADE_S);
   }
 
   function makeImpulse(context, seconds = 2.4, decay = 2.8) {
@@ -75,7 +106,7 @@ export function createAmbience({ toggleEl } = {}) {
     convolver.buffer = makeImpulse(ctx);
 
     masterGain = ctx.createGain();
-    masterGain.gain.value = muted ? 0 : MASTER_VOLUME;
+    masterGain.gain.value = desiredGain();
 
     source.connect(lowpass);
     lowpass.connect(highshelf);
@@ -139,7 +170,10 @@ export function createAmbience({ toggleEl } = {}) {
     start,
     toggle,
     setMuted,
+    duck,
+    unduck,
     isMuted: () => muted,
+    isDucked: () => duckCount > 0,
     show,
     hide,
   };

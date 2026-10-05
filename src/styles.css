@@ -419,8 +419,7 @@ body {
 .memory-audio {
   display: block;
   width: 100%;
-  margin: 0;
-  height: 2rem;
+  margin: 0.15rem 0 0;
 }
 
 .dismiss {

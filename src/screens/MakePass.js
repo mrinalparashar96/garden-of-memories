@@ -4,8 +4,9 @@ import {
   PASS_ART,
 } from "../pass/passArt.js";
 import { renderPassCard, updatePassCardEl } from "../pass/PassCard.js";
-import { createPass, getPass, updatePass } from "../pass/passStore.js";
+import { clearPass, createPass, getPass, updatePass } from "../pass/passStore.js";
 import { playPassReady } from "../pass/passReady.js";
+import { mountWalletOffer } from "../walletPass.js";
 
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 const HOLD_MS = 1500;
@@ -308,6 +309,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
             ${renderPassCard(pass, { showMeta: true })}
           </div>
           <p class="make-pass-ready-line">Your pass is ready. Take it somewhere.</p>
+          <div class="wallet-offer" data-wallet></div>
           <div class="make-pass-actions">
             <button type="button" class="pill pill--primary" data-map>Back to the map</button>
             <button type="button" class="pill pill--ghost" data-edit>Edit pass</button>
@@ -326,6 +328,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
     root.querySelector("[data-edit]")?.addEventListener("click", () => {
       showEdit(pass);
     });
+    mountWalletOffer(root.querySelector("[data-wallet]"), pass);
 
     const cardEl = root.querySelector("[data-pass-card]");
     if (fromReady) {
@@ -363,6 +366,13 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
               ).join("")}
             </div>
             <button type="button" class="pill pill--primary" data-save>Save</button>
+            <div class="wallet-offer" data-wallet></div>
+            <div class="make-pass-remove">
+              <button type="button" class="make-pass-hold make-pass-hold--quiet" data-remove aria-label="Hold to remove this pass">
+                <span class="make-pass-hold-ring" data-remove-ring></span>
+                <span class="make-pass-hold-label">Remove this pass</span>
+              </button>
+            </div>
           </div>
           ${previewHtml(pass, { showMeta: true })}
         </div>
@@ -373,6 +383,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
     const count = root.querySelector("[data-count]");
     const cardEl = root.querySelector("[data-pass-card]");
     input?.focus();
+    mountWalletOffer(root.querySelector("[data-wallet]"), pass);
 
     const sync = () => {
       draft.name = (input?.value || "").slice(0, MAX_PASS_NAME);
@@ -389,6 +400,7 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
         updatePassCardEl(cardEl, { ...pass, ...draft }, { crossfade: true });
       });
     });
+    wireRemoveHold();
     root.querySelector("[data-save]")?.addEventListener("click", () => {
       const next = updatePass({
         name: draft.name.trim() || "VISITOR",
@@ -405,6 +417,68 @@ export function createMakePass({ mount, onBackToMap, onClose } = {}) {
           onComplete: () => showFinished(next),
         }
       );
+    });
+  }
+
+  function wireRemoveHold() {
+    const holdBtn = root.querySelector("[data-remove]");
+    const ring = root.querySelector("[data-remove-ring]");
+
+    const setProgress = (p) => {
+      if (ring) ring.style.setProperty("--hold", String(Math.max(0, Math.min(1, p))));
+    };
+
+    const stopHold = (complete) => {
+      holding = false;
+      window.cancelAnimationFrame(holdRaf);
+      if (complete) {
+        setProgress(1);
+        clearPass();
+        hide();
+        onBackToMap?.();
+        return;
+      }
+      gsap.to(
+        { v: Number(ring?.style.getPropertyValue("--hold") || 0) },
+        {
+          v: 0,
+          duration: 0.35,
+          ease: EASE,
+          onUpdate() {
+            setProgress(this.targets()[0].v);
+          },
+        }
+      );
+    };
+
+    const tick = (now) => {
+      if (!holding || step !== "edit") return;
+      const p = (now - holdStart) / HOLD_MS;
+      setProgress(p);
+      if (p >= 1) {
+        stopHold(true);
+        return;
+      }
+      holdRaf = requestAnimationFrame(tick);
+    };
+
+    const startHold = (e) => {
+      e.preventDefault();
+      if (holding || step !== "edit") return;
+      holding = true;
+      holdStart = performance.now();
+      holdRaf = requestAnimationFrame(tick);
+    };
+
+    holdBtn?.addEventListener("pointerdown", startHold);
+    holdBtn?.addEventListener("pointerup", () => {
+      if (holding) stopHold(false);
+    });
+    holdBtn?.addEventListener("pointerleave", () => {
+      if (holding) stopHold(false);
+    });
+    holdBtn?.addEventListener("pointercancel", () => {
+      if (holding) stopHold(false);
     });
   }
 

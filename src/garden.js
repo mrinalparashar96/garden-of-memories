@@ -1236,6 +1236,7 @@ export async function createGarden(canvas, ui, options = {}) {
       relationship: RELATIONSHIP_LABELS[memory.relationship],
       body: memory.body,
       audioDataUrl: memory.audioDataUrl || null,
+      lang: memory.lang || "",
       title: memory.title,
       emotion: memory.emotion || null,
       place: memory.place || "Opera House",

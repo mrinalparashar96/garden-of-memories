@@ -10,8 +10,15 @@ import { createOpener } from "./screens/Opener.js";
 import { createHowItWorks, hasCompletedWalkthrough } from "./screens/HowItWorks.js";
 import { createLocations } from "./screens/Locations.js";
 import { createMakePass } from "./screens/MakePass.js";
+import {
+  addPassToWallet,
+  canAddToAppleWallet,
+  passFromWalletSearch,
+  WALLET_ERROR,
+} from "./walletPass.js";
 import { createAddMemory } from "./screens/AddMemory.js";
 import { createAmbience } from "./ambience.js";
+import { createAudioPlayer } from "./audioPlayer.js";
 import { createSydneyMap } from "./sydneyMap.js";
 import {
   isBookmarked,
@@ -20,7 +27,17 @@ import {
 } from "./bookmarkStore.js";
 import { normalizeEmotion } from "./emotions.js";
 import gsap from "gsap";
+import { consumeFreshStart, showFreshStart } from "./freshStart.js";
 import "./arrival/arrival.css";
+
+if (typeof location !== "undefined" && typeof history !== "undefined") {
+  const remaining = consumeFreshStart(location.search);
+  if (remaining !== null) {
+    const next = `${location.pathname}${remaining ? `?${remaining}` : ""}${location.hash}`;
+    history.replaceState(null, "", next);
+    if (typeof document !== "undefined") showFreshStart();
+  }
+}
 
 /**
  * Flow: Opener → Sydney map → Opera House garden → How / Why / Pass / Leave
@@ -35,6 +52,8 @@ const memoryTitle = document.querySelector("#memory-title");
 const memoryRelationship = document.querySelector("#memory-relationship");
 const memoryBody = document.querySelector("#memory-body");
 const memoryAudio = document.querySelector("#memory-audio");
+/** @type {ReturnType<typeof createAudioPlayer> | null} */
+let memoryPlayer = null;
 const memoryDismiss = document.querySelector("#memory-dismiss");
 const btnSaveMemory = document.querySelector("#btn-save-memory");
 const ambienceToggle = document.querySelector("#ambience-toggle");
@@ -533,6 +552,7 @@ const ui = {
     relationship,
     body,
     audioDataUrl,
+    lang = "",
     title,
     emotion,
     place = "Opera House",
@@ -574,13 +594,26 @@ const ui = {
       }
     }
     memoryBody.textContent = body;
+    // Tell the browser the language so fonts, hyphenation and screen readers behave.
+    if (lang) memoryBody.setAttribute("lang", lang);
+    else memoryBody.removeAttribute("lang");
+    if (memoryTitle) {
+      if (lang) memoryTitle.setAttribute("lang", lang);
+      else memoryTitle.removeAttribute("lang");
+    }
     syncSaveButton();
     if (memoryAudio) {
       if (audioDataUrl) {
-        memoryAudio.src = audioDataUrl;
+        if (!memoryPlayer) {
+          memoryPlayer = createAudioPlayer(memoryAudio, {
+            onPlay: () => ambience.duck(),
+            onPause: () => ambience.unduck(),
+          });
+        }
+        memoryPlayer.setSource(audioDataUrl);
         memoryAudio.hidden = false;
       } else {
-        memoryAudio.removeAttribute("src");
+        memoryPlayer?.stop();
         memoryAudio.hidden = true;
       }
     }
@@ -675,8 +708,7 @@ const ui = {
         });
       }
       if (memoryAudio) {
-        memoryAudio.pause?.();
-        memoryAudio.removeAttribute("src");
+        memoryPlayer?.stop();
         memoryAudio.hidden = true;
       }
       if (memoryLeftBy) {
@@ -838,6 +870,12 @@ function ensureGarden() {
         },
         onArrivalNote(id) {
           showArrivalNote(id);
+        },
+        onRecordingStart() {
+          ambience.duck();
+        },
+        onRecordingEnd() {
+          ambience.unduck();
         },
       });
       if (import.meta.env.DEV) {
@@ -1072,7 +1110,31 @@ function openMemoryPass(opts = {}) {
   makePass?.open(opts);
 }
 
+async function redeemWalletLink() {
+  const path = location.pathname.replace(/\/+$/, "");
+  if (!path.endsWith("/wallet")) return;
+  const note = document.createElement("p");
+  note.className = "wallet-route-note";
+  document.body.appendChild(note);
+  const pass = passFromWalletSearch(location.search);
+  if (!pass) {
+    note.textContent = "This pass link is incomplete.";
+    return;
+  }
+  if (!canAddToAppleWallet()) {
+    note.textContent = "Open this link on your iPhone to add the pass.";
+    return;
+  }
+  note.textContent = "Opening your pass…";
+  try {
+    await addPassToWallet(pass, note);
+  } catch {
+    note.textContent = WALLET_ERROR;
+  }
+}
+
 function boot() {
+  void redeemWalletLink();
   opener = createOpener({
     mount: shellMount || app,
     onEnter: () => enterMap({ startWalkthrough: true }),
